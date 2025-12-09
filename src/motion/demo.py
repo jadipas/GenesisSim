@@ -2,6 +2,7 @@
 import numpy as np
 from .trajectory import execute_trajectory, generate_composite_trajectory
 from .steps import execute_steps
+from src.utils import print_ik_target_vs_current
 
 
 def _as_np(vec):
@@ -72,28 +73,40 @@ def run_pick_and_place_demo(
     lift_height = max(cube_pos[2] + 0.26, 0.30)
 
     # Move to hover above the cube
+    hover_target_pos = np.array([cube_pos[0], cube_pos[1], hover_height])
+    print(f"[DEBUG] Hover target: pos={hover_target_pos}, quat={quat_ny}")
     q_hover = franka.inverse_kinematics(
         link=end_effector,
-        pos=np.array([cube_pos[0], cube_pos[1], hover_height]),
+        pos=hover_target_pos,
         quat=quat_ny,
     )
+    print(f"[DEBUG] Hover IK result: {q_hover}")
     q_hover[-2:] = 0.04
+    print(f"[DEBUG] Hover IK with gripper: {q_hover}")
     path = franka.plan_path(qpos_goal=q_hover, num_waypoints=200)
-    execute_trajectory(franka, scene, cam, end_effector, cube, logger, path, display_video=display_video)
+    print(f"[DEBUG] Hover trajectory has {len(path)} waypoints")
+    execute_trajectory(franka, scene, cam, end_effector, cube, logger, path, display_video=display_video, phase_name="Hover")
 
     # Stabilize at hover
-    execute_steps(franka, scene, cam, end_effector, cube, logger, num_steps=60, display_video=display_video)
+    execute_steps(franka, scene, cam, end_effector, cube, logger, num_steps=60, display_video=display_video, phase_name="Hover Stabilize")
 
     # Descend toward the cube
+    approach_target_pos = np.array([
+        cube_pos[0] + lateral_offset[0],
+        cube_pos[1] + lateral_offset[1],
+        approach_height + height_jitter,
+    ])
+    print(f"[DEBUG] Approach target: pos={approach_target_pos}, lateral_offset={lateral_offset}, height_jitter={height_jitter}")
     q_approach = franka.inverse_kinematics(
         link=end_effector,
-        pos=np.array([
-            cube_pos[0] + lateral_offset[0],
-            cube_pos[1] + lateral_offset[1],
-            approach_height + height_jitter,
-        ]),
+        pos=approach_target_pos,
         quat=quat_ny,
     )
+    print(f"[DEBUG] Approach IK result: {q_approach}")
+    q_current = franka.get_qpos()
+    if hasattr(q_current, 'cpu'):
+        q_current = q_current.cpu().numpy()
+    print_ik_target_vs_current(franka, q_approach[:-2], q_current, "Approach")
     execute_steps(
         franka,
         scene,
@@ -105,6 +118,8 @@ def run_pick_and_place_demo(
         motors_dof=motors_dof,
         qpos=q_approach[:-2],
         display_video=display_video,
+        debug=True,
+        phase_name="Approach",
     )
 
     # Grasp
@@ -199,6 +214,7 @@ def run_pick_and_place_demo(
         path,
         display_video=display_video,
         step_callbacks=mass_callbacks,
+        phase_name="Transport",
     )
 
     final_arm_qpos = path[-1][:-2]

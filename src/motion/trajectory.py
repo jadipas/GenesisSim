@@ -74,7 +74,7 @@ def generate_composite_trajectory(
 
 
 def execute_trajectory(franka, scene, cam, end_effector, cube, logger, 
-                       path, display_video=True, check_contact=True, step_callbacks=None):
+                       path, display_video=True, check_contact=True, step_callbacks=None, phase_name="", debug=False):
     """
     Execute a planned trajectory with sensor data collection.
     
@@ -88,6 +88,9 @@ def execute_trajectory(franka, scene, cam, end_effector, cube, logger,
         path: Trajectory waypoints
         display_video: Whether to display RGB/Depth video
         check_contact: Whether to check for contact lost events
+        step_callbacks: Optional callbacks to invoke at specific steps
+        phase_name: Name of phase for logging
+        debug: Whether to print detailed debug info
     """
     callbacks = {}
     if step_callbacks:
@@ -101,6 +104,9 @@ def execute_trajectory(franka, scene, cam, end_effector, cube, logger,
             for step_idx, fn in step_callbacks:
                 callbacks.setdefault(int(step_idx), []).append(fn)
 
+    if phase_name:
+        print(f"{phase_name}...")
+    
     for step_idx, waypoint in enumerate(path):
         franka.control_dofs_position(waypoint)
         scene.step()
@@ -116,6 +122,15 @@ def execute_trajectory(franka, scene, cam, end_effector, cube, logger,
                     fn()
                 except Exception as exc:
                     print(f"Callback at step {step_idx} failed: {exc}")
+        
+        if debug and step_idx % 50 == 0:
+            q_current = franka.get_qpos()
+            dq_current = franka.get_dofs_velocity()
+            if hasattr(q_current, 'cpu'):
+                q_current = q_current.cpu().numpy()
+            if hasattr(dq_current, 'cpu'):
+                dq_current = dq_current.cpu().numpy()
+            print(f"[{phase_name or 'Traj'} Step {step_idx}/{len(path)}] Joint vel (arm): {dq_current[:7]}")
 
         if check_contact and logger.detect_contact_lost():
             print(f"CONTACT LOST at timestep {logger.timestep}")

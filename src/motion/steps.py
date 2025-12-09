@@ -6,7 +6,7 @@ from src.sensors import collect_sensor_data
 
 def execute_steps(franka, scene, cam, end_effector, cube, logger, 
                  num_steps, motors_dof=None, qpos=None, finger_force=None, fingers_dof=None,
-                 display_video=True, print_status=False, print_interval=20, phase_name=""):
+                 display_video=True, print_status=False, print_interval=20, phase_name="", debug=False):
     """
     Execute simulation steps with sensor data collection.
     
@@ -26,6 +26,7 @@ def execute_steps(franka, scene, cam, end_effector, cube, logger,
         print_status: Whether to print status updates
         print_interval: Steps between status prints
         phase_name: Name of current phase for logging
+        debug: Whether to print detailed debug info (joint positions, velocities)
     """
     if phase_name:
         print(f"{phase_name}...")
@@ -42,6 +43,23 @@ def execute_steps(franka, scene, cam, end_effector, cube, logger,
         
         sensor_data = collect_sensor_data(franka, end_effector, cube, cam, include_vision=False)
         logger.log_step(sensor_data)
+        
+        if debug and i % print_interval == 0:
+            q_current = franka.get_qpos()
+            dq_current = franka.get_dofs_velocity()
+            tau_current = franka.get_dofs_force()
+            if hasattr(q_current, 'cpu'):
+                q_current = q_current.cpu().numpy()
+            if hasattr(dq_current, 'cpu'):
+                dq_current = dq_current.cpu().numpy()
+            if hasattr(tau_current, 'cpu'):
+                tau_current = tau_current.cpu().numpy()
+            print(f"[{phase_name or 'Phase'} Step {i}]")
+            print(f"  Target: {qpos if qpos is not None else 'N/A'}")
+            print(f"  Joint pos: {q_current}")
+            print(f"  Joint vel: {dq_current}")
+            print(f"  Joint tau: {tau_current}")
+            print(f"  EE pos: {sensor_data['ee_pos']}, EE vel: {sensor_data['ee_lin_vel']}")
         
         if print_status and i % print_interval == 0:
             contact_str = "IN CONTACT" if sensor_data['in_contact'] else "NO CONTACT"

@@ -1,6 +1,10 @@
 """Genesis Franka Pick-and-Place Simulation - Main Launch Script."""
 import numpy as np
 import time
+import os
+
+# Suppress Genesis verbose output
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 # Import configuration
 from src.config import parse_args, init_genesis
