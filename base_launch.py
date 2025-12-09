@@ -15,7 +15,7 @@ from src.scene import setup_scene, setup_entities, setup_camera, configure_robot
 from src.camera import update_wrist_camera
 
 # Import motion execution
-from src.motion import run_pick_and_place_demo
+from src.motion import run_iterative_pick_and_place
 
 # Parse arguments and initialize
 args = parse_args()
@@ -32,7 +32,8 @@ def main():
     
     # Setup scene
     scene = setup_scene(show_viewer=show_viewer)
-    plane, cube, franka = setup_entities(scene)
+    num_cubes = np.random.randint(3, 6)
+    plane, cubes, franka = setup_entities(scene, num_cubes=num_cubes)
     cam = setup_camera(scene) if show_camera_playback else None
     
     # Build scene
@@ -49,9 +50,18 @@ def main():
     if cam is not None:
         update_wrist_camera(cam, end_effector)
     
-    # Run demonstration
-    run_pick_and_place_demo(franka, scene, cam, end_effector, cube, logger, motors_dof, fingers_dof,
-                           display_video=show_camera_playback)
+    # Run iterative multi-cube demonstration
+    run_iterative_pick_and_place(
+        franka,
+        scene,
+        cam,
+        end_effector,
+        cubes,
+        logger,
+        motors_dof,
+        fingers_dof,
+        display_video=show_camera_playback,
+    )
     
     # Save and report results
     logger.save('sensor_data.npz')

@@ -74,7 +74,7 @@ def generate_composite_trajectory(
 
 
 def execute_trajectory(franka, scene, cam, end_effector, cube, logger, 
-                       path, display_video=True, check_contact=True):
+                       path, display_video=True, check_contact=True, step_callbacks=None):
     """
     Execute a planned trajectory with sensor data collection.
     
@@ -89,7 +89,19 @@ def execute_trajectory(franka, scene, cam, end_effector, cube, logger,
         display_video: Whether to display RGB/Depth video
         check_contact: Whether to check for contact lost events
     """
-    for waypoint in path:
+    callbacks = {}
+    if step_callbacks:
+        # Normalize to dict of step index -> list of callables
+        if isinstance(step_callbacks, dict):
+            for k, v in step_callbacks.items():
+                if v is None:
+                    continue
+                callbacks.setdefault(int(k), []).extend(v if isinstance(v, (list, tuple)) else [v])
+        else:
+            for step_idx, fn in step_callbacks:
+                callbacks.setdefault(int(step_idx), []).append(fn)
+
+    for step_idx, waypoint in enumerate(path):
         franka.control_dofs_position(waypoint)
         scene.step()
         update_wrist_camera(cam, end_effector)
@@ -97,6 +109,14 @@ def execute_trajectory(franka, scene, cam, end_effector, cube, logger,
         sensor_data = collect_sensor_data(franka, end_effector, cube, cam, include_vision=False)
         logger.log_step(sensor_data)
         
+        # Invoke any scheduled callbacks for this step
+        if step_idx in callbacks:
+            for fn in callbacks[step_idx]:
+                try:
+                    fn()
+                except Exception as exc:
+                    print(f"Callback at step {step_idx} failed: {exc}")
+
         if check_contact and logger.detect_contact_lost():
             print(f"CONTACT LOST at timestep {logger.timestep}")
         
