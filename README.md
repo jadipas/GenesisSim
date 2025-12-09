@@ -123,6 +123,37 @@ Scene and robot setup utilities.
 - `setup_camera()`: Adds wrist-mounted RGB-D camera
 - `configure_robot()`: Sets PD control gains and force limits
 
+#### PD Controller Tuning
+
+The `configure_robot()` function supports multiple gain presets to control motion behavior:
+
+```python
+# Use different gain presets
+configure_robot(franka, preset="default")          # Balanced (recommended)
+configure_robot(franka, preset="low_overshoot")    # Slow, stable motion
+configure_robot(franka, preset="aggressive")       # Fast tracking, more overshoot
+configure_robot(franka, preset="original")         # Legacy gains (causes overshoot)
+```
+
+**Understanding the gains:**
+- **kp (proportional gain)**: Controls stiffness. Higher values = faster response but more overshoot
+- **kv (derivative gain)**: Controls damping. Higher values = smoother motion, less overshoot
+- **Critical parameter**: `kv/kp ratio` determines damping behavior
+  - Ratio < 0.3: Underdamped (overshoots)
+  - Ratio 0.4-0.6: Critically damped (optimal response)
+  - Ratio > 0.7: Overdamped (slow, stable)
+
+**Available presets:**
+| Preset | kp/kv Ratio | Behavior | Use Case |
+|--------|------------|----------|----------|
+| `default` | 0.25 | Balanced | General pick-and-place |
+| `low_overshoot` | 0.35 | Slow, stable | Fragile objects, high precision |
+| `aggressive` | 0.17 | Fast, responsive | Quick movements, can overshoot |
+| `original` | 0.11 | Very responsive | Legacy, causes significant overshoot |
+
+To adjust gains further, modify the `GAIN_PRESETS` dictionary in `src/scene/robot_config.py`.
+
+
 ### `src.camera`
 Camera control and pose updates.
 - `update_wrist_camera()`: Updates camera pose to follow end-effector

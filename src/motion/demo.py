@@ -11,6 +11,20 @@ def _as_np(vec):
     return np.asarray(vec, dtype=float)
 
 
+def _get_gripper_finger_tip_offset():
+    """
+    Get the Z-offset from hand link center to gripper finger tips (when closed).
+    
+    Franka gripper specs:
+    - Finger length: ~0.1m from hand mounting point
+    - When fully open: ~0.04m apart (0.02m per finger)
+    - Hand center to closed finger tip: ~0.105m downward
+    
+    Returns the Z offset (negative, downward from hand link center).
+    """
+    return -0.105  # Approximate distance from hand link to closed finger tip
+
+
 def _get_mass(cube):
     for getter in ("get_mass", "mass", "get_mass_properties"):
         try:
@@ -65,16 +79,28 @@ def run_pick_and_place_demo(
     drop_pos = _as_np(drop_pos) if drop_pos is not None else np.array([0.55, 0.25, 0.15])
     quat_ny = np.array([0, 1, 0, 0])  # fixed face-down orientation
 
-    lateral_offset = np.random.uniform(-0.015, 0.015, size=2)
-    height_jitter = np.random.uniform(-0.01, 0.015)
+    # Cube dimensions: 0.04m x 0.04m x 0.04m
+    # cube_pos is the center, so half-height = 0.02m
+    cube_half_height = 0.02
+    cube_top_z = cube_pos[2] + cube_half_height
+    
+    # Gripper finger tip offset from hand link center
+    # hand link is above the actual closing point of fingers
+    finger_tip_offset = _get_gripper_finger_tip_offset()
 
-    hover_height = max(cube_pos[2] + 0.20, 0.24)
-    approach_height = max(cube_pos[2] + 0.11, 0.12)
-    lift_height = max(cube_pos[2] + 0.26, 0.30)
+    lateral_offset = np.random.uniform(-0.005, 0.005, size=2)
+    # height_jitter = np.random.uniform(-0.01, 0.015)
+
+    # Heights for hand link center (IK targets the hand link, not finger tips)
+    # We need to add finger_tip_offset to get proper clearance
+    hover_height = cube_top_z + 0.20 - finger_tip_offset
+    approach_height = cube_top_z + 0.005 - finger_tip_offset  # Fingers just above cube top
+    lift_height = cube_top_z + 0.26 - finger_tip_offset
 
     # Move to hover above the cube
     hover_target_pos = np.array([cube_pos[0], cube_pos[1], hover_height])
     print(f"[DEBUG] Hover target: pos={hover_target_pos}, quat={quat_ny}")
+    print(f"[DEBUG] Cube top Z: {cube_top_z:.4f}, Hand link hover Z: {hover_height:.4f}, Finger tip Z: {hover_height + finger_tip_offset:.4f}")
     q_hover = franka.inverse_kinematics(
         link=end_effector,
         pos=hover_target_pos,
@@ -83,20 +109,21 @@ def run_pick_and_place_demo(
     print(f"[DEBUG] Hover IK result: {q_hover}")
     q_hover[-2:] = 0.04
     print(f"[DEBUG] Hover IK with gripper: {q_hover}")
-    path = franka.plan_path(qpos_goal=q_hover, num_waypoints=200)
+    path = franka.plan_path(qpos_goal=q_hover, num_waypoints=300)  # Increased from 200 for smoother motion with damped controller
     print(f"[DEBUG] Hover trajectory has {len(path)} waypoints")
     execute_trajectory(franka, scene, cam, end_effector, cube, logger, path, display_video=display_video, phase_name="Hover")
 
     # Stabilize at hover
-    execute_steps(franka, scene, cam, end_effector, cube, logger, num_steps=60, display_video=display_video, phase_name="Hover Stabilize")
+    execute_steps(franka, scene, cam, end_effector, cube, logger, num_steps=80, display_video=display_video, phase_name="Hover Stabilize")
 
     # Descend toward the cube
     approach_target_pos = np.array([
         cube_pos[0] + lateral_offset[0],
         cube_pos[1] + lateral_offset[1],
-        approach_height + height_jitter,
+        approach_height,
     ])
-    print(f"[DEBUG] Approach target: pos={approach_target_pos}, lateral_offset={lateral_offset}, height_jitter={height_jitter}")
+    print(f"[DEBUG] Approach target: pos={approach_target_pos}, lateral_offset={lateral_offset}")
+    print(f"[DEBUG] Approach: Hand link Z: {approach_height:.4f}, Finger tip Z: {approach_height + finger_tip_offset:.4f}, Cube top Z: {cube_top_z:.4f}")
     q_approach = franka.inverse_kinematics(
         link=end_effector,
         pos=approach_target_pos,
@@ -130,7 +157,7 @@ def run_pick_and_place_demo(
         end_effector,
         cube,
         logger,
-        num_steps=120,
+        num_steps=150,
         motors_dof=motors_dof,
         qpos=q_approach[:-2],
         finger_force=np.array([-0.5, -0.5]),
@@ -154,11 +181,11 @@ def run_pick_and_place_demo(
         end_effector,
         cube,
         logger,
-        num_steps=160,
+        num_steps=200,
         motors_dof=motors_dof,
         qpos=q_lift[:-2],
         print_status=True,
-        print_interval=40,
+        print_interval=50,
         phase_name="Lifting",
         display_video=display_video,
     )
@@ -168,17 +195,17 @@ def run_pick_and_place_demo(
     hover_drop_z = max(lift_height + 0.06, drop_pos[2] + 0.18)
     apex_z = hover_drop_z + 0.18  # higher arc
     transfer_waypoints = [
-        {"pos": [cube_pos[0], cube_pos[1], lift_height], "quat": quat_ny, "steps": 90},
-        {"pos": [mid_xy[0], mid_xy[1], apex_z], "quat": quat_ny, "steps": 90},
-        {"pos": [drop_pos[0], drop_pos[1], hover_drop_z], "quat": quat_ny, "steps": 80},
-        {"pos": [drop_pos[0], drop_pos[1], drop_pos[2]], "quat": quat_ny, "steps": 70},
+        {"pos": [cube_pos[0], cube_pos[1], lift_height], "quat": quat_ny, "steps": 120},
+        {"pos": [mid_xy[0], mid_xy[1], apex_z], "quat": quat_ny, "steps": 120},
+        {"pos": [drop_pos[0], drop_pos[1], hover_drop_z], "quat": quat_ny, "steps": 100},
+        {"pos": [drop_pos[0], drop_pos[1], drop_pos[2]], "quat": quat_ny, "steps": 90},
     ]
 
     path = generate_composite_trajectory(
         franka,
         end_effector,
         transfer_waypoints,
-        default_steps=90,
+        default_steps=120,
         finger_qpos=0.0,
     )
     # Choose 0-2 random steps along the transfer to double cube mass
@@ -227,7 +254,7 @@ def run_pick_and_place_demo(
         end_effector,
         cube,
         logger,
-        num_steps=120,
+        num_steps=150,
         motors_dof=motors_dof,
         qpos=final_arm_qpos,
         finger_force=np.array([0.6, 0.6]),
@@ -252,7 +279,7 @@ def run_pick_and_place_demo(
         end_effector,
         cube,
         logger,
-        num_steps=100,
+        num_steps=130,
         motors_dof=motors_dof,
         qpos=retreat_qpos[:-2],
         display_video=display_video,
