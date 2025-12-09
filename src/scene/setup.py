@@ -48,10 +48,10 @@ def setup_entities(scene, num_cubes: int = 1, cube_positions=None, cube_area=Non
     """Add entities to the scene with configurable cube spawning."""
     plane = scene.add_entity(gs.morphs.Plane())
 
-    # Define spawn area in front of the robot
+    # Define spawn area in front of the robot (foreground, forward reach)
     cube_area = cube_area or {
-        "x_range": (0.50, 0.82),
-        "y_range": (-0.20, 0.20),
+        "x_range": (0.65, 0.85),
+        "y_range": (-0.18, 0.18),
         "z": 0.02,
         "min_separation": 0.08,
     }
