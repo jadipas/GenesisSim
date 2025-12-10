@@ -2,7 +2,14 @@
 import numpy as np
 from .trajectory import execute_trajectory, generate_composite_trajectory
 from .steps import execute_steps
-from src.utils import print_ik_target_vs_current
+from src.utils import (
+    print_ik_target_vs_current,
+    draw_spawn_area,
+    draw_drop_area,
+    draw_trajectory_debug,
+    erase_trajectory_debug,
+    log_transfer_debug,
+)
 
 
 def _as_np(vec):
@@ -60,6 +67,77 @@ def _set_mass(cube, value):
         return False
 
 
+def _slerp_quat(q0, q1, t):
+    """Spherical linear interpolation between two unit quaternions."""
+    q0 = np.asarray(q0, dtype=float)
+    q1 = np.asarray(q1, dtype=float)
+    dot = np.dot(q0, q1)
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+    dot = np.clip(dot, -1.0, 1.0)
+    theta = np.arccos(dot)
+    if np.abs(theta) < 1e-6:
+        return q0 + t * (q1 - q0)
+    sin_theta = np.sin(theta)
+    return (np.sin((1.0 - t) * theta) / sin_theta) * q0 + (np.sin(t * theta) / sin_theta) * q1
+
+
+def _generate_arc_transfer_waypoints(
+    start_pos,
+    end_pos,
+    quat,
+    quat_end=None,
+    arc_height=0.18,
+    num_points=24,
+    target_total_steps=240,
+):
+    """
+    Generate a smooth arc tilted at ~45° away from robot base, with Slerp'd orientation.
+
+    - Arc plane is tilted away from base at ~45°, not vertical.
+    - Control point creates a parabolic bulge in that plane.
+    - Orientation interpolated via Slerp from quat_start to quat_end.
+    """
+    p0 = np.asarray(start_pos, dtype=float)
+    p1 = np.asarray(end_pos, dtype=float)
+    quat_start = np.asarray(quat, dtype=float)
+    quat_end_arr = np.asarray(quat_end, dtype=float) if quat_end is not None else quat_start.copy()
+
+    radial_xy = np.array([p0[0] + p1[0], p0[1] + p1[1]], dtype=float)
+    radial_norm = np.linalg.norm(radial_xy)
+    if radial_norm > 1e-4:
+        radial_dir = radial_xy / radial_norm
+    else:
+        radial_dir = np.array([1.0, 0.0], dtype=float)
+
+    up = np.array([0.0, 0.0, 1.0], dtype=float)
+    tilt_angle = np.radians(45.0)
+    tilt_dir_xy = radial_dir
+    arc_normal = np.array([
+        tilt_dir_xy[0] * np.cos(tilt_angle),
+        tilt_dir_xy[1] * np.cos(tilt_angle),
+        np.sin(tilt_angle)
+    ], dtype=float)
+
+    ctrl = 0.5 * (p0 + p1)
+    ctrl = ctrl + arc_height * arc_normal
+
+    ts = np.linspace(0.0, 1.0, num_points)
+    steps_per = int(np.clip(target_total_steps / max(num_points - 1, 1), 4, 40))
+
+    arc_waypoints = []
+    for t in ts[1:]:  # skip p0 (already current)
+        pos = (1 - t) * (1 - t) * p0 + 2 * (1 - t) * t * ctrl + t * t * p1
+        quat_interp = _slerp_quat(quat_start, quat_end_arr, t)
+        arc_waypoints.append({"pos": pos.tolist(), "quat": quat_interp.tolist(), "steps": steps_per})
+
+    if arc_waypoints:
+        arc_waypoints[-1]["pos"] = p1.tolist()
+
+    return arc_waypoints
+
+
 def run_pick_and_place_demo(
     franka,
     scene,
@@ -71,6 +149,7 @@ def run_pick_and_place_demo(
     fingers_dof,
     display_video=True,
     drop_pos=None,
+    debug_plot_transfer=True,
 ):
     """
     Execute pick-and-place for a single cube to a specified drop position.
@@ -99,7 +178,6 @@ def run_pick_and_place_demo(
 
     # Move to hover above the cube
     hover_target_pos = np.array([cube_pos[0], cube_pos[1], hover_height])
-    print(f"[DEBUG] Hover target: pos={hover_target_pos}, quat={quat_ny}")
     print(f"[DEBUG] Cube top Z: {cube_top_z:.4f}, Hand link hover Z: {hover_height:.4f}, Finger tip Z: {hover_height + finger_tip_offset:.4f}")
     q_hover = franka.inverse_kinematics(
         link=end_effector,
@@ -190,17 +268,29 @@ def run_pick_and_place_demo(
         display_video=display_video,
     )
 
-    # Plan and execute transport to drop site
-    mid_xy = np.array([(cube_pos[0] + drop_pos[0]) / 2, (cube_pos[1] + drop_pos[1]) / 2])
+    # Plan and execute transport to drop site with a robust arc
     hover_drop_z = max(lift_height + 0.06, drop_pos[2] + 0.18)
-    apex_z = hover_drop_z + 0.18  # higher arc
-    transfer_waypoints = [
-        {"pos": [cube_pos[0], cube_pos[1], lift_height], "quat": quat_ny, "steps": 120},
-        {"pos": [mid_xy[0], mid_xy[1], apex_z], "quat": quat_ny, "steps": 120},
-        {"pos": [drop_pos[0], drop_pos[1], hover_drop_z], "quat": quat_ny, "steps": 100},
-        {"pos": [drop_pos[0], drop_pos[1], drop_pos[2]], "quat": quat_ny, "steps": 90},
-    ]
+    start_pos = np.array([cube_pos[0], cube_pos[1], lift_height])
+    end_hover_pos = np.array([drop_pos[0], drop_pos[1], hover_drop_z])
 
+    transfer_waypoints = _generate_arc_transfer_waypoints(
+        start_pos=start_pos,
+        end_pos=end_hover_pos,
+        quat=quat_ny,
+        arc_height=0.18,
+        num_points=24,
+        target_total_steps=240,
+    )
+
+    # Final descent to place the cube
+    transfer_waypoints.append({"pos": [drop_pos[0], drop_pos[1], drop_pos[2]], "quat": quat_ny, "steps": 90})
+
+    # Draw trajectory debug visualization
+    debug_trajectory_lines = draw_trajectory_debug(scene, transfer_waypoints, color=(1, 1, 0, 1))
+
+    # Get current joint state to ensure trajectory continuity
+    q_current_before_transfer = _as_np(franka.get_qpos())
+    
     path = generate_composite_trajectory(
         franka,
         end_effector,
@@ -208,6 +298,19 @@ def run_pick_and_place_demo(
         default_steps=120,
         finger_qpos=0.0,
     )
+
+    # Check for large IK jump at trajectory start and insert smooth transition if needed
+    if len(path) > 0:
+        first_q = path[0]
+        joint_delta = np.linalg.norm(q_current_before_transfer[:7] - first_q[:7])
+        if joint_delta > 0.5:  # Large discontinuity detected
+            print(f"[DEBUG] Large IK jump at transport start (delta={joint_delta:.3f} rad). Inserting smooth transition.")
+            n_transition = 15
+            transition = np.linspace(q_current_before_transfer, first_q, n_transition + 1)[1:]
+            path = np.vstack([transition, path])
+
+    if debug_plot_transfer:
+        log_transfer_debug(transfer_waypoints, path, franka, end_effector)
     # Choose 0-2 random steps along the transfer to double cube mass
     base_mass = _get_mass(cube)
     mass_scale = [base_mass if base_mass is not None else None]
@@ -265,6 +368,9 @@ def run_pick_and_place_demo(
         display_video=display_video,
     )
 
+    # Erase trajectory debug visualization after cube is dropped
+    erase_trajectory_debug(scene, debug_trajectory_lines)
+
     # Retreat upwards to a safe pose after placement
     retreat_qpos = franka.inverse_kinematics(
         link=end_effector,
@@ -303,8 +409,14 @@ def run_iterative_pick_and_place(
         print("No cubes to manipulate.")
         return
 
+    # Draw spawn and drop areas
+    spawn_area = draw_spawn_area(scene, x_range=(0.55, 0.75), y_range=(-0.28, 0.08), z_height=0.15)
+    
     drop_base = np.array([0.55, 0.38, 0.14])
-    drop_step = np.array([0.0, -0.08, 0.0])
+    drop_step = np.array([0.0, 0.0, 0.0])
+    
+    # Draw drop area for the first drop position
+    drop_area = draw_drop_area(scene, drop_pos=drop_base, area_size=0.15, z_height=0.20)
 
     remaining = list(cubes)
     for i in range(len(remaining)):
@@ -324,6 +436,7 @@ def run_iterative_pick_and_place(
             fingers_dof,
             display_video=display_video,
             drop_pos=drop_pos,
+            debug_plot_transfer=True,
         )
 
         # Despawn placed cube

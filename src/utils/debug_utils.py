@@ -83,3 +83,182 @@ def print_ik_target_vs_current(franka, target_qpos, current_qpos=None, phase_nam
     print(f"  Max arm joint delta: {max_delta:.4f} rad")
     for i, (c, t, d) in enumerate(zip(current[:7], target[:7], delta[:7])):
         print(f"    Joint {i}: {c:.4f} -> {t:.4f} (Δ={d:+.4f})")
+
+
+def draw_spawn_area(scene, x_range=(0.65, 0.85), y_range=(-0.18, 0.18), z_height=0.15):
+    """
+    Draw a semi-transparent blue box for the spawn area.
+    
+    Args:
+        scene: Genesis scene object
+        x_range: X coordinate range (min, max)
+        y_range: Y coordinate range (min, max)
+        z_height: Height of the visualization box
+    
+    Returns:
+        Debug box handle for later clearing
+    """
+    try:
+        debug_box = scene.draw_debug_box(
+            bounds=[
+                [x_range[0], y_range[0], 0],
+                [x_range[1], y_range[1], z_height]
+            ],
+            color=(0, 0, 1, 0.3),  # Blue with 30% alpha
+            wireframe=False,
+        )
+        print(f"[DEBUG] Drew spawn area box")
+        return debug_box
+    except Exception as e:
+        print(f"[DEBUG] Failed to draw spawn area: {e}")
+        return None
+
+
+def draw_drop_area(scene, drop_pos, area_size=0.15, z_height=0.20):
+    """
+    Draw a semi-transparent green box for the drop-off area.
+    
+    Args:
+        scene: Genesis scene object
+        drop_pos: Center position of drop area [x, y, z]
+        area_size: Size of the area in xy plane (±area_size from center)
+        z_height: Height of the visualization box
+    
+    Returns:
+        Debug box handle for later clearing
+    """
+    drop_pos = np.asarray(drop_pos, dtype=float)
+    
+    try:
+        debug_box = scene.draw_debug_box(
+            bounds=[
+                [drop_pos[0] - area_size, drop_pos[1] - area_size, 0],
+                [drop_pos[0] + area_size, drop_pos[1] + area_size, z_height]
+            ],
+            color=(0, 1, 0, 0.3),  # Green with 30% alpha
+            wireframe=False,
+        )
+        print(f"[DEBUG] Drew drop area box at {drop_pos}")
+        return debug_box
+    except Exception as e:
+        print(f"[DEBUG] Failed to draw drop area: {e}")
+        return None
+
+
+def draw_trajectory_debug(scene, waypoints, color=(1, 1, 0, 1), line_radius=0.005):
+    """
+    Draw the intended trajectory as lines connecting waypoints.
+    
+    Args:
+        scene: Genesis scene object
+        waypoints: List of waypoint dicts with "pos" key
+        color: RGBA color tuple (default: yellow)
+        line_radius: Radius of debug lines
+    
+    Returns:
+        List of debug line object handles for later clearing
+    """
+    debug_lines = []
+    positions = []
+    
+    # Extract positions from waypoints
+    for wp in waypoints:
+        pos = np.array(wp.get("pos", [np.nan, np.nan, np.nan]), dtype=float)
+        if not np.any(np.isnan(pos)):
+            positions.append(pos)
+    
+    # Draw lines between consecutive waypoints
+    for i in range(len(positions) - 1):
+        try:
+            debug_line = scene.draw_debug_line(
+                start=positions[i],
+                end=positions[i + 1],
+                radius=line_radius,
+                color=color
+            )
+            debug_lines.append(debug_line)
+        except Exception as e:
+            print(f"[DEBUG] Failed to draw trajectory line {i}: {e}")
+    
+    print(f"[DEBUG] Drew {len(debug_lines)} trajectory visualization lines")
+    return debug_lines
+
+
+def erase_trajectory_debug(scene, debug_lines):
+    """
+    Clear debug trajectory lines from the scene.
+    
+    Args:
+        scene: Genesis scene object
+        debug_lines: List of debug line handles to clear
+    """
+    for debug_line in debug_lines:
+        try:
+            scene.clear_debug_object(debug_line)
+        except Exception as e:
+            print(f"[DEBUG] Failed to clear debug line: {e}")
+    
+    if debug_lines:
+        print(f"[DEBUG] Cleared {len(debug_lines)} trajectory visualization lines")
+
+
+def log_transfer_debug(waypoints, joint_path, franka, end_effector):
+    """Print planned waypoints and sampled FK points to console."""
+    print("[DEBUG] Transfer waypoints (Cartesian)")
+    for i, wp in enumerate(waypoints):
+        pos = np.array(wp.get("pos", [np.nan, np.nan, np.nan]), dtype=float)
+        steps = wp.get("steps", "?")
+        print(f"  [{i:02d}] pos={pos}, steps={steps}")
+
+    fk_fn = None
+    for name in ("forward_kinematics", "compute_forward_kinematics", "fk"):
+        if hasattr(franka, name):
+            fk_fn = getattr(franka, name)
+            break
+
+    if fk_fn is None or joint_path is None or len(joint_path) == 0:
+        print("[DEBUG] FK sampling skipped (no fk fn or empty path)")
+    else:
+        sample_stride = max(1, len(joint_path) // 10)
+        print(f"[DEBUG] Joint path samples (every {sample_stride} steps, total {len(joint_path)})")
+        for idx in range(0, len(joint_path), sample_stride):
+            q = joint_path[idx]
+            pos = None
+            for kwargs in (
+                {"qpos": q, "link": end_effector},
+                {"q": q, "link": end_effector},
+                {"qpos": q},
+            ):
+                try:
+                    res = fk_fn(**kwargs)
+                    pos = res[0] if isinstance(res, (list, tuple)) else getattr(res, "pos", res)
+                    break
+                except TypeError:
+                    continue
+                except Exception:
+                    break
+            if pos is None:
+                try:
+                    res = fk_fn(q, end_effector)
+                    pos = res[0] if isinstance(res, (list, tuple)) else getattr(res, "pos", res)
+                except Exception:
+                    pos = None
+            if pos is None:
+                continue
+            pos_arr = np.asarray(pos, dtype=float)
+            if pos_arr.size >= 3:
+                print(f"  step {idx:04d} fk pos={pos_arr[:3]}")
+
+    if joint_path is None or len(joint_path) == 0:
+        return
+
+    # Print a few raw joint samples to spot big jumps
+    head = joint_path[:3]
+    tail = joint_path[-3:] if len(joint_path) > 3 else []
+    print("[DEBUG] Joint path head (first 3)")
+    for i, q in enumerate(head):
+        print(f"  head[{i}]: {np.asarray(q)}")
+    if len(tail) > 0:
+        print("[DEBUG] Joint path tail (last 3)")
+        for i, q in enumerate(tail):
+            print(f"  tail[{len(joint_path)-len(tail)+i}]: {np.asarray(q)}")
