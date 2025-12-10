@@ -165,16 +165,17 @@ def run_pick_and_place_demo(
     
     # Gripper finger tip offset from hand link center
     # hand link is above the actual closing point of fingers
-    finger_tip_offset = _get_gripper_finger_tip_offset()
+    finger_tip_offset = _get_gripper_finger_tip_offset()  # -0.105m (negative = downward)
 
     lateral_offset = np.random.uniform(-0.005, 0.005, size=2)
     # height_jitter = np.random.uniform(-0.01, 0.015)
 
     # Heights for hand link center (IK targets the hand link, not finger tips)
-    # We need to add finger_tip_offset to get proper clearance
-    hover_height = cube_top_z + 0.20 - finger_tip_offset
-    approach_height = cube_top_z + 0.005 - finger_tip_offset  # Fingers just above cube top
-    lift_height = cube_top_z + 0.26 - finger_tip_offset
+    # Since finger_tip_offset is negative (downward), we SUBTRACT it to raise the hand link
+    # so that the finger tips reach the desired height
+    hover_height = cube_top_z + 0.20 - finger_tip_offset  # Fingers 0.20m above cube
+    approach_height = cube_top_z + 0.005 - finger_tip_offset  # Fingers 5mm above cube top
+    lift_height = cube_top_z + 0.26 - finger_tip_offset  # Fingers 0.26m above cube
 
     # Move to hover above the cube
     hover_target_pos = np.array([cube_pos[0], cube_pos[1], hover_height])
@@ -286,7 +287,7 @@ def run_pick_and_place_demo(
     transfer_waypoints.append({"pos": [drop_pos[0], drop_pos[1], drop_pos[2]], "quat": quat_ny, "steps": 90})
 
     # Draw trajectory debug visualization
-    debug_trajectory_lines = draw_trajectory_debug(scene, transfer_waypoints, color=(1, 1, 0, 1))
+    # debug_trajectory_lines = draw_trajectory_debug(scene, transfer_waypoints, color=(1, 1, 0, 1))
 
     # Get current joint state to ensure trajectory continuity
     q_current_before_transfer = _as_np(franka.get_qpos())
@@ -369,7 +370,7 @@ def run_pick_and_place_demo(
     )
 
     # Erase trajectory debug visualization after cube is dropped
-    erase_trajectory_debug(scene, debug_trajectory_lines)
+    # erase_trajectory_debug(scene, debug_trajectory_lines)
 
     # Retreat upwards to a safe pose after placement
     retreat_qpos = franka.inverse_kinematics(
@@ -410,13 +411,13 @@ def run_iterative_pick_and_place(
         return
 
     # Draw spawn and drop areas
-    spawn_area = draw_spawn_area(scene, x_range=(0.55, 0.75), y_range=(-0.28, 0.08), z_height=0.15)
+    # _ = draw_spawn_area(scene, x_range=(0.35, 0.55), y_range=(-0.28, 0.18), z_height=0.15)
     
     drop_base = np.array([0.55, 0.38, 0.14])
     drop_step = np.array([0.0, 0.0, 0.0])
     
     # Draw drop area for the first drop position
-    drop_area = draw_drop_area(scene, drop_pos=drop_base, area_size=0.15, z_height=0.20)
+    # _ = draw_drop_area(scene, drop_pos=drop_base, area_size=0.05, z_height=0.20)
 
     remaining = list(cubes)
     for i in range(len(remaining)):

@@ -50,8 +50,8 @@ def setup_entities(scene, num_cubes: int = 1, cube_positions=None, cube_area=Non
 
     # Define spawn area in front of the robot (foreground, forward reach)
     cube_area = cube_area or {
-        "x_range": (0.55, 0.75),
-        "y_range": (-0.28, 0.08),
+        "x_range": (0.35, 0.55),
+        "y_range": (-0.28, 0.18),
         "z": 0.02,
         "min_separation": 0.08,
     }
@@ -68,7 +68,7 @@ def setup_entities(scene, num_cubes: int = 1, cube_positions=None, cube_area=Non
     cubes = [
         scene.add_entity(
             gs.morphs.Box(
-                size=(0.04, 0.04, 0.04),
+                size=(0.05, 0.05, 0.05),
                 pos=tuple(pos),
             )
         )
