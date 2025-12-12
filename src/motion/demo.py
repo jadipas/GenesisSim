@@ -246,7 +246,7 @@ def _generate_arc_transfer_waypoints(
     """
     Generate a smooth arc tilted at ~45° away from robot base, with Slerp'd orientation.
 
-    - Arc plane is tilted away from base at ~45°, not vertical.
+    - Arc plane is tilted away from base at ~45° ± random 10°, not vertical.
     - Control point creates a parabolic bulge in that plane.
     - Orientation interpolated via Slerp from quat_start to quat_end.
     """
@@ -263,7 +263,8 @@ def _generate_arc_transfer_waypoints(
         radial_dir = np.array([1.0, 0.0], dtype=float)
 
     up = np.array([0.0, 0.0, 1.0], dtype=float)
-    tilt_angle = np.radians(45.0)
+    # Randomize tilt angle ±10 degrees around 45°
+    tilt_angle = np.radians(45.0 + np.random.uniform(-10.0, 10.0))
     tilt_dir_xy = radial_dir
     arc_normal = np.array([
         tilt_dir_xy[0] * np.cos(tilt_angle),
@@ -332,15 +333,15 @@ def run_pick_and_place_demo(
     # hand link is above the actual closing point of fingers
     finger_tip_offset = _get_gripper_finger_tip_offset()  # -0.105m (negative = downward)
 
-    lateral_offset = np.random.uniform(-0.01, 0.01, size=2)
+    lateral_offset = np.random.uniform(-0.015, 0.015, size=2)
     # height_jitter = np.random.uniform(-0.01, 0.015)
 
     # Heights for hand link center (IK targets the hand link, not finger tips)
     # finger_tip_offset is -0.105 (downward from hand link center)
     # To position fingers at height H: hand_link_z = H - finger_tip_offset = H + 0.105
-    hover_height = cube_top_z + 0.30 + abs(finger_tip_offset)  # Fingers 0.30m above cube
-    approach_height = cube_top_z + abs(finger_tip_offset) + np.random.uniform(0.03, 0.008)  
-    lift_height = cube_top_z + 0.10 + abs(finger_tip_offset)  # Fingers 0.10m above cube
+    hover_height = cube_top_z + 0.20 + abs(finger_tip_offset)  # Fingers 0.20m above cube
+    approach_height = cube_top_z + abs(finger_tip_offset) + np.random.uniform(0.005, 0.01)  
+    lift_height = cube_top_z + 0.15 + abs(finger_tip_offset)  # Fingers 0.10m above cube
 
     # Move to hover above the cube
     hover_target_pos = np.array([cube_pos[0], cube_pos[1], hover_height])
@@ -385,7 +386,7 @@ def run_pick_and_place_demo(
         end_effector,
         cube,
         logger,
-        num_steps=90,
+        num_steps=150,
         motors_dof=motors_dof,
         qpos=q_approach[:-2],
         display_video=display_video,
@@ -446,9 +447,9 @@ def run_pick_and_place_demo(
         end_pos=end_hover_pos,
         quat=quat_grasp,
         quat_end=quat_drop,
-        arc_height=np.random.uniform(0.65, 0.75),
+        arc_height=np.random.uniform(0.55, 0.65),
         num_points=24,
-        target_total_steps=240,
+        target_total_steps=24,
     )
 
     # Final descent to place the cube
@@ -464,7 +465,7 @@ def run_pick_and_place_demo(
         franka,
         end_effector,
         transfer_waypoints,
-        default_steps=120,
+        default_steps=150,
         finger_qpos=0.0,
     )
 
