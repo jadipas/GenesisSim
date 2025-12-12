@@ -55,7 +55,7 @@ def generate_composite_trajectory(
         q_goal_arr[-2:] = finger_vals
         return q_goal_arr
 
-    for wp in waypoints:
+    for i, wp in enumerate(waypoints):
         pos = np.asarray(wp["pos"], dtype=float)
         quat = np.asarray(wp.get("quat", [0, 1, 0, 0]), dtype=float)
         steps = int(wp.get("steps", default_steps))
@@ -64,6 +64,12 @@ def generate_composite_trajectory(
         q_goal = franka.inverse_kinematics(link=end_effector, pos=pos, quat=quat)
         finger_override = wp.get("finger", finger_qpos)
         q_goal = _apply_finger_target(q_goal, finger_override)
+        
+        # Check for large joint jumps that indicate IK discontinuity
+        joint_delta = np.linalg.norm(current_q[:7] - q_goal[:7])
+        if joint_delta > 1.0:
+            print(f"[WARN] Large IK jump at waypoint {i}: {joint_delta:.3f} rad. Doubling interpolation steps.")
+            steps = max(steps, int(steps * 2.0))  # Double steps for very large jumps
 
         # Interpolate including the goal and excluding the current starting point
         segment = np.linspace(current_q, q_goal, steps, endpoint=True)[1:]

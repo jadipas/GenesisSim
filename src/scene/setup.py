@@ -44,6 +44,20 @@ def _sample_cube_positions(num_cubes: int, x_range, y_range, z: float, min_separ
     return positions
 
 
+def _random_quaternion():
+    """Generate a random unit quaternion for rotation around z-axis only."""
+    # Random angle around z-axis
+    angle = np.random.uniform(0, 2 * np.pi)
+    
+    # Quaternion for rotation around z-axis: [cos(θ/2), 0, 0, sin(θ/2)]
+    return np.array([
+        np.cos(angle / 2),
+        0.0,
+        0.0,
+        np.sin(angle / 2),
+    ])
+
+
 def setup_entities(scene, num_cubes: int = 1, cube_positions=None, cube_area=None):
     """Add entities to the scene with configurable cube spawning."""
     plane = scene.add_entity(gs.morphs.Plane())
@@ -51,8 +65,8 @@ def setup_entities(scene, num_cubes: int = 1, cube_positions=None, cube_area=Non
     # Define spawn area in front of the robot (foreground, forward reach)
     cube_area = cube_area or {
         "x_range": (0.35, 0.55),
-        "y_range": (-0.28, 0.18),
-        "z": 0.02,
+        "y_range": (-0.55, -0.05),
+        "z": 0.035,
         "min_separation": 0.08,
     }
 
@@ -70,6 +84,7 @@ def setup_entities(scene, num_cubes: int = 1, cube_positions=None, cube_area=Non
             gs.morphs.Box(
                 size=(0.05, 0.05, 0.05),
                 pos=tuple(pos),
+                quat=tuple(_random_quaternion()),
             )
         )
         for pos in cube_positions

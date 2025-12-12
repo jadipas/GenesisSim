@@ -20,6 +20,8 @@ class SensorDataLogger:
         """Clear all logged data."""
         self.data = defaultdict(list)
         self.timestep = 0
+        self.phase_markers = {}  # Track phase boundaries for slippage calculation
+        self.grasp_phase_contact = []  # Track contact during grasping phase
     
     def log_step(self, step_data: Dict[str, Any]):
         """Log data for current timestep."""
@@ -71,8 +73,86 @@ class SensorDataLogger:
             self.data['in_contact'][i-1] and not self.data['in_contact'][i] 
             for i in range(1, len(self.data['in_contact']))
         ])
+        
+        # Calculate slippage: contact loss between grasp and drop phases
+        slippage_occurred = False
+        if 'Grasping' in self.phase_markers and 'Releasing' in self.phase_markers:
+            grasp_end = self.phase_markers['Grasping']['end']
+            release_start = self.phase_markers['Releasing']['start']
+            
+            # Check if contact was lost between end of grasping and start of releasing
+            if grasp_end < release_start and grasp_end < len(self.data['in_contact']):
+                contact_during_transport = self.data['in_contact'][grasp_end:release_start]
+                slippage_occurred = not all(contact_during_transport)
+        
         return {
             'total_timesteps': total_timesteps,
             'total_contact': total_contact,
-            'contact_lost_events': contact_lost_events
+            'contact_lost_events': contact_lost_events,
+            'slippage_occurred': slippage_occurred,
+            'slippage_count': contact_lost_events  # Alternative: count actual lost events during transport
         }
+    
+    def mark_phase_start(self, phase_name: str):
+        """Mark the start of a phase (e.g., 'Grasping', 'Transport', 'Releasing')."""
+        if phase_name not in self.phase_markers:
+            self.phase_markers[phase_name] = {}
+        self.phase_markers[phase_name]['start'] = self.timestep
+    
+    def mark_phase_end(self, phase_name: str):
+        """Mark the end of a phase."""
+        if phase_name not in self.phase_markers:
+            self.phase_markers[phase_name] = {}
+        self.phase_markers[phase_name]['end'] = self.timestep
+        
+        # Store contact state during grasping phase for analysis
+        if phase_name == 'Grasping':
+            phase_start = self.phase_markers[phase_name].get('start', 0)
+            phase_end = self.phase_markers[phase_name].get('end', self.timestep)
+            self.grasp_phase_contact = self.data['in_contact'][phase_start:phase_end]
+    
+    def get_slippage_metrics(self) -> Dict[str, Any]:
+        """
+        Get detailed slippage metrics for the pick-and-place task.
+        
+        Returns:
+            Dict with:
+            - slippage_occurred: bool, whether contact was lost during transport
+            - grasp_to_drop_contact_loss: number of contact loss events between grasp and drop
+            - transport_phase_contact: percentage of transport phase with contact
+            - minimum_grasp_stability: confidence in grasp during grasping phase
+        """
+        metrics = {
+            'slippage_occurred': False,
+            'grasp_to_drop_contact_loss': 0,
+            'transport_phase_contact_pct': 100.0,
+            'grasp_phase_contact_pct': 100.0,
+        }
+        
+        if 'Grasping' in self.phase_markers and 'Releasing' in self.phase_markers:
+            grasp_start = self.phase_markers['Grasping'].get('start', 0)
+            grasp_end = self.phase_markers['Grasping'].get('end', self.timestep)
+            release_start = self.phase_markers['Releasing'].get('start', self.timestep)
+            
+            # Grasp phase stability
+            if grasp_start < grasp_end:
+                grasp_contact = self.data['in_contact'][grasp_start:grasp_end]
+                grasp_contact_pct = (sum(grasp_contact) / len(grasp_contact) * 100) if grasp_contact else 0
+                metrics['grasp_phase_contact_pct'] = grasp_contact_pct
+            
+            # Transport phase (between grasping and releasing)
+            if grasp_end < release_start:
+                transport_contact = self.data['in_contact'][grasp_end:release_start]
+                if transport_contact:
+                    transport_contact_pct = sum(transport_contact) / len(transport_contact) * 100
+                    metrics['transport_phase_contact_pct'] = transport_contact_pct
+                    metrics['slippage_occurred'] = transport_contact_pct < 95.0  # Slippage if <95% contact
+                    
+                    # Count contact loss events during transport
+                    loss_events = sum([
+                        not transport_contact[i] and transport_contact[i-1]
+                        for i in range(1, len(transport_contact))
+                    ])
+                    metrics['grasp_to_drop_contact_loss'] = loss_events
+        
+        return metrics

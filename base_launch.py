@@ -70,9 +70,16 @@ def main():
     # Save and report results
     logger.save('sensor_data.npz')
     stats = logger.get_summary_stats()
+    slippage_metrics = logger.get_slippage_metrics()
+    
     print(f"\nCollected {stats['total_timesteps']} timesteps of sensor data")
     print(f"Total contact events: {stats['total_contact']}")
     print(f"Contact lost events: {stats['contact_lost_events']}")
+    print(f"\n--- Slippage Analysis ---")
+    print(f"Slippage occurred: {slippage_metrics['slippage_occurred']}")
+    print(f"Contact loss events during transport: {slippage_metrics['grasp_to_drop_contact_loss']}")
+    print(f"Grasp phase contact: {slippage_metrics['grasp_phase_contact_pct']:.1f}%")
+    print(f"Transport phase contact: {slippage_metrics['transport_phase_contact_pct']:.1f}%")
 
 
 if __name__ == "__main__":
