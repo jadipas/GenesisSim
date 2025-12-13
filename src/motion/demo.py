@@ -541,6 +541,24 @@ def run_pick_and_place_demo(
         display_video=display_video,
     )
     logger.mark_phase_end("Releasing")
+    
+    # Display force graph for this pick-and-place cycle
+    print("[DEMO] Cube dropped. Displaying force telemetry...")
+    releasing_viz_key = f"Releasing_cycle{logger.cycle_count}"
+    if releasing_viz_key in logger.phase_visualizers:
+        viz = logger.phase_visualizers[releasing_viz_key]
+        print(f"[DEMO] Force data collected: {len(viz.timestamps)} timesteps")
+        if len(viz.timestamps) > 0:
+            print(f"[DEMO] Left force range: {min(viz.left_forces):.3f} - {max(viz.left_forces):.3f} N")
+            print(f"[DEMO] Right force range: {min(viz.right_forces):.3f} - {max(viz.right_forces):.3f} N")
+            viz.plot(block=True)
+        else:
+            print("[DEMO] No force data to display!")
+    else:
+        print(f"[DEMO] No visualizer found for key: {releasing_viz_key}")
+    
+    print("[DEMO] Resuming with next cube...")
+    logger.cycle_count += 1
 
     # Erase trajectory debug visualization after cube is dropped
     erase_trajectory_debug(scene, debug_trajectory_lines)

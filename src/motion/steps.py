@@ -64,7 +64,8 @@ def execute_steps(franka, scene, cam, end_effector, cube, logger,
         if print_status and i % print_interval == 0:
             contact_str = "IN CONTACT" if sensor_data['in_contact'] else "NO CONTACT"
             cube_height = sensor_data['obj_pos'][2]
-            print(f"  Step {i}: {contact_str}, Force: {sensor_data['contact_force']:.3f}N, "
+            total_force = sensor_data.get('total_contact_force', 0.0)
+            print(f"  Step {i}: {contact_str}, L:{sensor_data['left_finger_force']:.3f}N R:{sensor_data['right_finger_force']:.3f}N, "
                   f"Gripper: {sensor_data['gripper_width']:.4f}m, Cube Z: {cube_height:.3f}m, "
                   f"Lifted: {sensor_data['cube_lifted']}")
         

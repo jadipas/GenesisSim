@@ -1,7 +1,8 @@
 """Sensor data logger class for collecting simulation data."""
 import numpy as np
 from collections import defaultdict
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
+from src.utils.force_viz import ForceVisualizer
 
 
 class SensorDataLogger:
@@ -22,12 +23,26 @@ class SensorDataLogger:
         self.timestep = 0
         self.phase_markers = {}  # Track phase boundaries for slippage calculation
         self.grasp_phase_contact = []  # Track contact during grasping phase
+        self.phase_visualizers: Dict[str, ForceVisualizer] = {}  # Force plots per phase
+        self.current_phase: Optional[str] = None  # Currently active phase
+        self.current_viz_key: Optional[str] = None  # Current visualizer key
+        self.cycle_count: int = 0  # Track which pick-and-place cycle we're in
+
     
     def log_step(self, step_data: Dict[str, Any]):
         """Log data for current timestep."""
         step_data['timestep'] = self.timestep
         for key, value in step_data.items():
             self.data[key].append(value)
+        
+        # Record forces for current phase
+        if hasattr(self, 'current_viz_key') and self.current_viz_key in self.phase_visualizers:
+            left_force = step_data.get('left_finger_force', 0.0)
+            right_force = step_data.get('right_finger_force', 0.0)
+            self.phase_visualizers[self.current_viz_key].add_measurement(
+                left_force, right_force, self.timestep
+            )
+        
         self.timestep += 1
     
     def get_last(self, key: str) -> Any:
@@ -98,9 +113,22 @@ class SensorDataLogger:
         if phase_name not in self.phase_markers:
             self.phase_markers[phase_name] = {}
         self.phase_markers[phase_name]['start'] = self.timestep
+        
+        # Initialize force visualizer for this phase
+        self.current_phase = phase_name
+        # Use cycle-specific key so each pick gets its own graph
+        viz_key = f"{phase_name}_cycle{self.cycle_count}"
+        if viz_key not in self.phase_visualizers:
+            self.phase_visualizers[viz_key] = ForceVisualizer(f"{phase_name} (Cycle {self.cycle_count})")
+        self.current_viz_key = viz_key
     
-    def mark_phase_end(self, phase_name: str):
-        """Mark the end of a phase."""
+    def mark_phase_end(self, phase_name: str, show_graph: bool = False):
+        """Mark the end of a phase.
+        
+        Args:
+            phase_name: Name of phase that ended
+            show_graph: If True, display force graph and pause execution until closed
+        """
         if phase_name not in self.phase_markers:
             self.phase_markers[phase_name] = {}
         self.phase_markers[phase_name]['end'] = self.timestep

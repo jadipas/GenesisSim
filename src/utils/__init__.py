@@ -10,6 +10,7 @@ from .debug_utils import (
     erase_trajectory_debug,
     log_transfer_debug,
 )
+from .force_viz import ForceVisualizer
 
 __all__ = [
     'suppress_genesis_output',
@@ -21,4 +22,6 @@ __all__ = [
     'draw_trajectory_debug',
     'erase_trajectory_debug',
     'log_transfer_debug',
+    'ForceVisualizer',
 ]
+
