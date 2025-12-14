@@ -1,6 +1,6 @@
 """Pick-and-place demonstration functionality."""
 import numpy as np
-from slipgen.trajectory import execute_trajectory, generate_composite_trajectory
+from slipgen.trajectory import execute_trajectory, generate_composite_trajectory, execute
 from slipgen.steps import execute_steps
 from slipgen.debug_utils import (
     print_ik_target_vs_current,
@@ -134,6 +134,69 @@ def _mirror_gripper_orientation(gripper_quat, angle_deg=90.0):
     return _rotation_matrix_to_quat(R_rotated)
 
 
+def apply_phase_warp_bump(path: np.ndarray, level: int) -> np.ndarray:
+    """
+    Keep same number of steps, but traverse mid-section faster via a smooth phase warp.
+    level: 0=no bump, 1 mild, 2 medium, 3 strong
+    """
+    path = np.asarray(path)
+    n = len(path)
+    if level <= 0 or n < 20:
+        return path
+
+    # bump strength: larger -> stronger speedup in the middle
+    a = {1: 0.35, 2: 0.65, 3: 1.0}.get(level, 0.35)
+
+    # normalized time grid
+    t = np.linspace(0.0, 1.0, n)
+
+    # Smooth "S" bump centered at 0.5: derivative increases near the center
+    # We implement a phase warp using a tanh-based cumulative mapping.
+    k = 6.0  # sharpness of the bump
+    bump = np.tanh(k * (t - 0.5))
+    bump = (bump - bump.min()) / (bump.max() - bump.min())  # [0,1]
+    # Combine with identity; 'a' controls how much we deviate from uniform phase
+    phi = (1 - a) * t + a * bump
+
+    # Ensure strict monotonicity and endpoints
+    phi[0], phi[-1] = 0.0, 1.0
+    phi = np.maximum.accumulate(phi)
+
+    # Sample original path at indices corresponding to phi
+    idx_f = phi * (n - 1)
+    idx0 = np.floor(idx_f).astype(int)
+    idx1 = np.clip(idx0 + 1, 0, n - 1)
+    w = idx_f - idx0
+
+    # Linear interpolation in joint space (arm joints only)
+    # Preserve gripper DOFs to avoid random opening during transport
+    if path.shape[1] > 7:  # Has gripper DOFs
+        arm_warped = (1 - w)[:, None] * path[idx0, :7] + w[:, None] * path[idx1, :7]
+        # Take gripper values from original path (no interpolation)
+        gripper_original = path[:, 7:]
+        warped = np.hstack([arm_warped, gripper_original])
+    else:
+        warped = (1 - w)[:, None] * path[idx0] + w[:, None] * path[idx1]
+    return warped
+
+
+def add_joint_shake(q: np.ndarray, step_idx: int, total_steps: int,
+                    amp: float = 0.015, freq: float = 6.0,
+                    joints=(3, 5)) -> np.ndarray:
+    """
+    Small sinusoidal shake on selected arm joints.
+    amp in radians. freq in cycles over the full trajectory.
+    Only affects arm joints (0-6), never gripper DOFs (7-8).
+    """
+    q2 = q.copy()
+    phase = 2 * np.pi * freq * (step_idx / max(1, total_steps - 1))
+    s = np.sin(phase)
+    for j in joints:
+        if j < 7:  # Only apply to arm joints, never gripper
+            q2[j] += amp * s
+    return q2
+
+
 def _generate_arc_transfer_waypoints(
     start_pos,
     end_pos,
@@ -142,8 +205,9 @@ def _generate_arc_transfer_waypoints(
     arc_height=0.55,
     num_points=24,
     target_total_steps=240,
+    arc_bias=0.0,
 ):
-    """Generate a smooth arc tilted at ~45° away from robot base."""
+    """Generate a smooth arc tilted at ~45° away from robot base with optional lateral bias."""
     p0 = np.asarray(start_pos, dtype=float)
     p1 = np.asarray(end_pos, dtype=float)
     quat_start = np.asarray(quat, dtype=float)
@@ -167,6 +231,11 @@ def _generate_arc_transfer_waypoints(
 
     ctrl = 0.5 * (p0 + p1)
     ctrl = ctrl + arc_height * arc_normal
+    
+    # Add lateral bias for tangential stress
+    if abs(arc_bias) > 1e-6:
+        lateral_dir = np.array([-radial_dir[1], radial_dir[0], 0.0], dtype=float)
+        ctrl = ctrl + arc_bias * lateral_dir
 
     ts = np.linspace(0.0, 1.0, num_points)
     steps_per = int(np.clip(target_total_steps / max(num_points - 1, 1), 4, 40))
@@ -195,8 +264,23 @@ def run_pick_and_place_demo(
     display_video=True,
     drop_pos=None,
     debug_plot_transfer=True,
+    transport_steps=240,
+    phase_warp_level=0,
+    shake_amp=0.0,
+    shake_freq=6.0,
 ):
-    """Execute pick-and-place for a single cube to a specified drop position."""
+    """
+    Execute pick-and-place for a single cube to a specified drop position.
+    
+    Transport disturbance parameters:
+    - transport_steps: Total steps for transport phase (default 240)
+    - phase_warp_level: 0=none, 1=mild, 2=medium, 3=strong speed-up in middle
+    - shake_amp: Joint shake amplitude in radians (0=off, 0.01-0.03 typical)
+    - shake_freq: Shake frequency in cycles over trajectory (4-8 typical)
+    """
+    # Reset visualizer for this pick-and-place cycle
+    logger.reset_visualizer()
+    
     cube_pos = _as_np(cube.get_pos())
     cube_quat = _as_np(cube.get_quat())
     drop_pos = _as_np(drop_pos) if drop_pos is not None else np.array([0.55, 0.25, 0.15])
@@ -322,7 +406,8 @@ def run_pick_and_place_demo(
         quat_end=quat_drop,
         arc_height=np.random.uniform(0.55, 0.65),
         num_points=24,
-        target_total_steps=24,
+        target_total_steps=transport_steps,  # Now configurable (default 240)
+        arc_bias=np.random.uniform(-0.03, 0.03),  # Lateral curvature for tangential stress
     )
 
     transfer_waypoints.append({"pos": [drop_pos[0], drop_pos[1], drop_pos[2]], "quat": quat_drop, "steps": 90})
@@ -331,12 +416,13 @@ def run_pick_and_place_demo(
 
     q_current_before_transfer = _as_np(franka.get_qpos())
     
+    # Generate trajectory with gripper closed (fingers at 0.0)
     path = generate_composite_trajectory(
         franka,
         end_effector,
         transfer_waypoints,
         default_steps=150,
-        finger_qpos=0.0,
+        finger_qpos=0.0,  # Keep gripper closed during transport
     )
 
     if len(path) > 0:
@@ -352,7 +438,8 @@ def run_pick_and_place_demo(
         log_transfer_debug(transfer_waypoints, path, franka, end_effector)
 
     logger.mark_phase_start("Transport")
-    execute_trajectory(
+    # Use execute() with disturbance parameters for repeatable slip stress
+    execute(
         franka,
         scene,
         cam,
@@ -361,8 +448,13 @@ def run_pick_and_place_demo(
         logger,
         path,
         display_video=display_video,
+        check_contact=True,
         step_callbacks=None,
         phase_name="Transport",
+        debug=False,
+        disturb_level=phase_warp_level,  # Apply phase warp for speed variation
+        shake_amp=shake_amp,              # Apply joint shake for inertial disturbance
+        shake_freq=shake_freq,
     )
     logger.mark_phase_end("Transport")
 
@@ -388,21 +480,12 @@ def run_pick_and_place_demo(
     )
     logger.mark_phase_end("Releasing")
     
-    print("[DEMO] Cube dropped. Displaying force telemetry...")
-    releasing_viz_key = f"Releasing_cycle{logger.cycle_count}"
-    if releasing_viz_key in logger.phase_visualizers:
-        viz = logger.phase_visualizers[releasing_viz_key]
-        print(f"[DEMO] Force data collected: {len(viz.timestamps)} timesteps")
-        if len(viz.timestamps) > 0:
-            print(f"[DEMO] Left force range: {min(viz.left_forces):.3f} - {max(viz.left_forces):.3f} N")
-            print(f"[DEMO] Right force range: {min(viz.right_forces):.3f} - {max(viz.right_forces):.3f} N")
-            viz.plot(block=True)
-        else:
-            print("[DEMO] No force data to display!")
-    else:
-        print(f"[DEMO] No visualizer found for key: {releasing_viz_key}")
+    print("[DEMO] Cube dropped. Generating force plot...")
     
-    print("[DEMO] Resuming with next cube...")
+    # Generate force plot for this pick-and-place cycle
+    filename = f"force_plot_cycle{logger.cycle_count}.png"
+    logger.save_force_plot(output_dir=".", filename=filename)
+    
     logger.cycle_count += 1
 
     erase_trajectory_debug(scene, debug_trajectory_lines)
@@ -438,8 +521,20 @@ def run_iterative_pick_and_place(
     motors_dof,
     fingers_dof,
     display_video=True,
+    transport_steps=240,
+    phase_warp_level=0,
+    shake_amp=0.0,
+    shake_freq=6.0,
 ):
-    """Iteratively pick random cubes and place them to the robot's side."""
+    """
+    Iteratively pick random cubes and place them to the robot's side.
+    
+    Transport disturbance parameters:
+    - transport_steps: Total steps for transport phase (default 240)
+    - phase_warp_level: 0=none, 1=mild, 2=medium, 3=strong speed-up in middle
+    - shake_amp: Joint shake amplitude in radians (0=off, 0.01-0.03 typical)
+    - shake_freq: Shake frequency in cycles over trajectory (4-8 typical)
+    """
     if not cubes:
         print("No cubes to manipulate.")
         return
@@ -466,6 +561,10 @@ def run_iterative_pick_and_place(
             display_video=display_video,
             drop_pos=drop_pos,
             debug_plot_transfer=True,
+            transport_steps=transport_steps,
+            phase_warp_level=phase_warp_level,
+            shake_amp=shake_amp,
+            shake_freq=shake_freq,
         )
 
         try:

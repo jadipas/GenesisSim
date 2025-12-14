@@ -36,6 +36,10 @@ def run_pick_place_sweep(num_cubes: int = 3, display_video: bool = True,
                 stats = logger.get_slippage_metrics()
                 results.append({'mu': mu, 'fn_cap': fn, 'disturb': d, **stats})
                 print(f"  Result: {stats}")
+                
+                # Save force plot for this configuration
+                filename = f"force_plot_sweep_mu{mu}_fn{fn}_d{d}.png"
+                logger.save_force_plot(output_dir=".", filename=filename)
     
     print(f"\nSweep finished: tested {total_configs} configurations.")
     return results
@@ -53,3 +57,6 @@ def generate_dataset(num_samples: int = 10, display_video: bool = False,
         run_pick_and_place_demo(franka, scene, cam, end_effector, cube, logger, motors_dof, fingers_dof,
                                 display_video=display_video, drop_pos=drop_pos)
     logger.save(save_path)
+    
+    # Save final force plot for entire dataset
+    logger.save_force_plot(output_dir=".", filename="dataset_force_plot.png")

@@ -9,6 +9,7 @@ class Logger:
     """Collects and stores sensor data for slip detection and dataset creation."""
     
     def __init__(self):
+        self.visualizer = ForceVisualizer(title="Gripper Force Monitoring")
         self.reset()
     
     def reset(self):
@@ -17,10 +18,9 @@ class Logger:
         self.timestep = 0
         self.phase_markers = {}
         self.grasp_phase_contact = []
-        self.phase_visualizers: Dict[str, ForceVisualizer] = {}
         self.current_phase: str | None = None
-        self.current_viz_key: str | None = None
         self.cycle_count: int = 0
+        # Keep visualizer alive across resets
 
     def log_step(self, step_data: Dict[str, Any]):
         """Log data for current timestep."""
@@ -28,12 +28,10 @@ class Logger:
         for key, value in step_data.items():
             self.data[key].append(value)
         
-        if hasattr(self, 'current_viz_key') and self.current_viz_key in self.phase_visualizers:
-            left_force = step_data.get('left_finger_force', 0.0)
-            right_force = step_data.get('right_finger_force', 0.0)
-            self.phase_visualizers[self.current_viz_key].add_measurement(
-                left_force, right_force, self.timestep
-            )
+        # Collect force data for later plotting
+        left_force = step_data.get('left_finger_force', 0.0)
+        right_force = step_data.get('right_finger_force', 0.0)
+        self.visualizer.add_measurement(left_force, right_force, self.timestep)
         
         self.timestep += 1
     
@@ -97,12 +95,11 @@ class Logger:
         if phase_name not in self.phase_markers:
             self.phase_markers[phase_name] = {}
         self.phase_markers[phase_name]['start'] = self.timestep
-        
         self.current_phase = phase_name
-        viz_key = f"{phase_name}_cycle{self.cycle_count}"
-        if viz_key not in self.phase_visualizers:
-            self.phase_visualizers[viz_key] = ForceVisualizer(f"{phase_name} (Cycle {self.cycle_count})")
-        self.current_viz_key = viz_key
+        
+        # Mark phase in visualizer for later plotting
+        phase_label = f"{phase_name} (C{self.cycle_count})" if self.cycle_count > 0 else phase_name
+        self.visualizer.mark_phase(phase_label, self.timestep)
     
     def mark_phase_end(self, phase_name: str, show_graph: bool = False):
         """Mark the end of a phase."""
@@ -148,3 +145,11 @@ class Logger:
                     metrics['grasp_to_drop_contact_loss'] = loss_events
         
         return metrics
+    
+    def save_force_plot(self, output_dir: str = ".", filename: str = "force_plot.png"):
+        """Generate and save force plot from collected data."""
+        self.visualizer.generate_and_save_plot(output_dir, filename)
+    
+    def reset_visualizer(self):
+        """Reset visualizer for a new experiment."""
+        self.visualizer = ForceVisualizer(title="Gripper Force Monitoring")

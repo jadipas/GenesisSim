@@ -77,6 +77,8 @@ def execute_trajectory(franka, scene, cam, end_effector, cube, logger,
         print(f"{phase_name}...")
     
     for step_idx, waypoint in enumerate(path):
+        # Apply joint shake during Transport phase if disturbance is enabled
+        # Note: shake parameters should be passed via step_callbacks or similar if needed
         franka.control_dofs_position(waypoint)
         scene.step()
         update_wrist_camera(cam, end_effector)
@@ -112,25 +114,67 @@ def execute_trajectory(franka, scene, cam, end_effector, cube, logger,
             cv2.waitKey(1)
 
 
-def _apply_accel_bump(path: np.ndarray, level: int) -> np.ndarray:
-    """Compress mid-segment samples to emulate an acceleration burst."""
-    if level <= 0 or len(path) < 10:
-        return path
+def apply_phase_warp_bump(path: np.ndarray, level: int) -> np.ndarray:
+    """
+    Keep same number of steps, but traverse mid-section faster via a smooth phase warp.
+    level: 0=no bump, 1 mild, 2 medium, 3 strong
+    """
+    path = np.asarray(path)
     n = len(path)
-    mid = n // 2
-    window = max(5, n // 6)
-    severity = {1: 0.5, 2: 0.35, 3: 0.2}.get(level, 0.5)
-    start = max(0, mid - window // 2)
-    end = min(n, mid + window // 2)
+    if level <= 0 or n < 20:
+        return path
 
-    pre = path[:start]
-    bump = path[start:end]
-    post = path[end:]
+    # bump strength: larger -> stronger speedup in the middle
+    a = {1: 0.35, 2: 0.65, 3: 1.0}.get(level, 0.35)
 
-    idx = np.linspace(0, len(bump) - 1, max(2, int(len(bump) * severity))).astype(int)
-    bump_fast = bump[idx]
+    # normalized time grid
+    t = np.linspace(0.0, 1.0, n)
 
-    return np.vstack([pre, bump_fast, post])
+    # Smooth "S" bump centered at 0.5: derivative increases near the center
+    # We implement a phase warp using a tanh-based cumulative mapping.
+    k = 6.0  # sharpness of the bump
+    bump = np.tanh(k * (t - 0.5))
+    bump = (bump - bump.min()) / (bump.max() - bump.min())  # [0,1]
+    # Combine with identity; 'a' controls how much we deviate from uniform phase
+    phi = (1 - a) * t + a * bump
+
+    # Ensure strict monotonicity and endpoints
+    phi[0], phi[-1] = 0.0, 1.0
+    phi = np.maximum.accumulate(phi)
+
+    # Sample original path at indices corresponding to phi
+    idx_f = phi * (n - 1)
+    idx0 = np.floor(idx_f).astype(int)
+    idx1 = np.clip(idx0 + 1, 0, n - 1)
+    w = idx_f - idx0
+
+    # Linear interpolation in joint space (arm joints only)
+    # Preserve gripper DOFs to avoid random opening during transport
+    if path.shape[1] > 7:  # Has gripper DOFs
+        arm_warped = (1 - w)[:, None] * path[idx0, :7] + w[:, None] * path[idx1, :7]
+        # Take gripper values from original path (no interpolation)
+        gripper_original = path[:, 7:]
+        warped = np.hstack([arm_warped, gripper_original])
+    else:
+        warped = (1 - w)[:, None] * path[idx0] + w[:, None] * path[idx1]
+    return warped
+
+
+def add_joint_shake(q: np.ndarray, step_idx: int, total_steps: int,
+                    amp: float = 0.015, freq: float = 6.0,
+                    joints=(3, 5)) -> np.ndarray:
+    """
+    Small sinusoidal shake on selected arm joints.
+    amp in radians. freq in cycles over the full trajectory.
+    Only affects arm joints (0-6), never gripper DOFs (7-8).
+    """
+    q2 = q.copy()
+    phase = 2 * np.pi * freq * (step_idx / max(1, total_steps - 1))
+    s = np.sin(phase)
+    for j in joints:
+        if j < 7:  # Only apply to arm joints, never gripper
+            q2[j] += amp * s
+    return q2
 
 
 def generate_composite(
@@ -158,9 +202,21 @@ def execute(
     phase_name: str = "",
     debug: bool = False,
     disturb_level: int = 0,
+    shake_amp: float = 0.0,
+    shake_freq: float = 6.0,
 ):
-    """Execute a trajectory with optional mid-path acceleration bump."""
-    path2 = _apply_accel_bump(np.asarray(path), disturb_level)
+    """Execute a trajectory with optional phase warp and joint shake disturbances."""
+    path2 = apply_phase_warp_bump(np.asarray(path), disturb_level)
+    
+    # Apply joint shake during transport if enabled
+    if shake_amp > 0 and phase_name == "Transport":
+        path_shaken = []
+        for step_idx, waypoint in enumerate(path2):
+            shaken = add_joint_shake(waypoint, step_idx, len(path2), 
+                                    amp=shake_amp, freq=shake_freq)
+            path_shaken.append(shaken)
+        path2 = np.array(path_shaken)
+    
     return execute_trajectory(
         franka,
         scene,

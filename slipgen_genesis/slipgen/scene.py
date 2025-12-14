@@ -65,7 +65,7 @@ def _random_quaternion():
     ])
 
 
-def setup_entities(scene, num_cubes: int = 1, cube_positions=None, cube_area=None):
+def setup_entities(scene, num_cubes: int = 1, cube_positions=None, cube_area=None, friction: float = 0.5, cube_size: float = 0.05, weight: float = 0.25):
     """Add entities to the scene with configurable cube spawning."""
     plane = scene.add_entity(gs.morphs.Plane())
 
@@ -84,14 +84,16 @@ def setup_entities(scene, num_cubes: int = 1, cube_positions=None, cube_area=Non
             cube_area["z"],
             cube_area["min_separation"],
         )
-
+    density = weight / (cube_size ** 3)
     cubes = [
         scene.add_entity(
             gs.morphs.Box(
-                size=(0.05, 0.05, 0.05),
+                size=(cube_size, cube_size, cube_size),
                 pos=tuple(pos),
                 quat=tuple(_random_quaternion()),
-            )
+            ),
+            material=gs.materials.Rigid(rho=density, friction=friction) # density calculated from weight and cube size
+
         )
         for pos in cube_positions
     ]
