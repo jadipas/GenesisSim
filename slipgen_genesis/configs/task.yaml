@@ -1,0 +1,3 @@
+# Task configuration for pick-and-place
+num_cubes: 3
+display_video: true
