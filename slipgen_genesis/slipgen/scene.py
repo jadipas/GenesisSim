@@ -5,6 +5,7 @@ import time
 import genesis as gs
 
 from slipgen.knobs import SlipKnobs
+from slipgen.camera import mount_wrist_camera
 
 # Preset PD gain configurations
 GAIN_PRESETS = {
@@ -176,6 +177,9 @@ def init_scene(show_viewer: bool = True):
             end_effector = franka.find_link('hand')
         except Exception:
             end_effector = franka
+
+    # Mount camera to the hand link
+    mount_wrist_camera(cam, end_effector)
 
     return scene, franka, cam, end_effector, cubes, motors_dof, fingers_dof
 
