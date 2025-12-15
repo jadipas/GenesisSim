@@ -8,9 +8,12 @@ from slipgen.contact_detection import detect_slip_by_distance
 
 def execute_steps(franka, scene, cam, end_effector, cube, logger, 
                  num_steps, motors_dof=None, qpos=None, finger_force=None, fingers_dof=None, finger_qpos=None,
-                 display_video=True, print_status=False, print_interval=20, phase_name="", debug=False, knobs=None,
+                 render_cameras=True, print_status=False, print_interval=20, phase_name="", debug=False, knobs=None,
                  check_slip: bool = True, slip_threshold: float = None):
     """Execute simulation steps with sensor data collection.
+    
+    Args:
+        render_cameras: If True, render OpenCV RGB/depth windows. Set False for headless.
     
     If finger_qpos is provided, fingers are controlled via position targets with force cap.
     If finger_force is provided (legacy), a clamped holding force is applied.
@@ -90,17 +93,22 @@ def execute_steps(franka, scene, cam, end_effector, cube, logger,
             print(f"  EE pos: {sensor_data['ee_pos']}, EE vel: {sensor_data['ee_lin_vel']}")
         
         if print_status and i % print_interval == 0:
-            contact_str = "IN CONTACT" if sensor_data['in_contact'] else "NO CONTACT"
-            cube_height = sensor_data['obj_pos'][2]
-            total_force = sensor_data.get('total_contact_force', 0.0)
-            print(f"  Step {i}: {contact_str}, L:{sensor_data['left_finger_force']:.3f}N R:{sensor_data['right_finger_force']:.3f}N, "
-                  f"Gripper: {sensor_data['gripper_width']:.4f}m, Cube Z: {cube_height:.3f}m, "
-                  f"Lifted: {sensor_data['cube_lifted']}")
+            contact_str = "IN CONTACT" if sensor_data.get('in_contact', False) else "NO CONTACT"
+            cube_height = sensor_data['obj_pos'][2] if 'obj_pos' in sensor_data else 0.0
+            # Handle case where contact forces aren't logged
+            left_f = sensor_data.get('left_finger_force', None)
+            right_f = sensor_data.get('right_finger_force', None)
+            if left_f is not None and right_f is not None:
+                force_str = f"L:{left_f:.3f}N R:{right_f:.3f}N"
+            else:
+                force_str = f"dist:{sensor_data.get('cube_ee_distance', 0):.4f}m"
+            print(f"  Step {i}: {contact_str}, {force_str}, "
+                  f"Gripper: {sensor_data['gripper_width']:.4f}m, Cube Z: {cube_height:.3f}m")
         
         if logger.detect_contact_lost():
             print(f"CONTACT LOST at timestep {logger.timestep}, Cube height: {sensor_data['obj_pos'][2]:.3f}m")
         
-        if display_video and cam is not None:
+        if render_cameras and cam is not None:
             rgb, depth, seg, normal = cam.render(depth=True)
             depth_vis = (depth / depth.max() * 255).astype('uint8')
             cv2.imshow("RGB", rgb[:, :, ::-1])

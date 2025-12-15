@@ -366,9 +366,15 @@ def generate_composite_trajectory(
     waypoints: Iterable[dict],
     default_steps: int = 150,
     finger_qpos: float | Sequence[float] | None = None,
+    start_q: np.ndarray | None = None,
 ):
-    """Build a single joint-space trajectory from sparse end-effector waypoints."""
-    current_q = _to_numpy(franka.get_qpos())
+    """Build a single joint-space trajectory from sparse end-effector waypoints.
+    
+    Args:
+        start_q: Optional starting joint configuration. If None, uses franka.get_qpos().
+                 Use this when chaining trajectories to avoid discontinuities.
+    """
+    current_q = _to_numpy(start_q) if start_q is not None else _to_numpy(franka.get_qpos())
     trajectory = [current_q]
 
     def _apply_finger_target(q_goal, finger_override):
@@ -406,9 +412,12 @@ def generate_composite_trajectory(
 
 
 def execute_trajectory(franka, scene, cam, end_effector, cube, logger, 
-                       path, display_video=True, check_contact=True, step_callbacks=None, phase_name="", debug=False, knobs=None, finger_force=None, fingers_dof=None, finger_qpos=None,
+                       path, render_cameras=True, check_contact=True, step_callbacks=None, phase_name="", debug=False, knobs=None, finger_force=None, fingers_dof=None, finger_qpos=None,
                        check_slip: bool = True, slip_threshold: float = None):
     """Execute a planned trajectory with sensor data collection and optional gripper control.
+
+    Args:
+        render_cameras: If True, render OpenCV RGB/depth windows. Set False for headless.
 
     If ``finger_qpos`` is provided, fingers are controlled via position targets with force cap.
     If ``finger_force`` is provided (legacy), a clamped holding force is applied.
@@ -501,7 +510,7 @@ def execute_trajectory(franka, scene, cam, end_effector, cube, logger,
         if check_contact and logger.detect_contact_lost():
             print(f"CONTACT LOST at timestep {logger.timestep}")
         
-        if display_video and cam is not None:
+        if render_cameras and cam is not None:
             rgb, depth, seg, normal = cam.render(depth=True)
             depth_vis = (depth / depth.max() * 255).astype('uint8')
             cv2.imshow("RGB", rgb[:, :, ::-1])
@@ -578,9 +587,10 @@ def generate_composite(
     waypoints: Iterable[dict],
     default_steps: int = 150,
     finger_qpos: Optional[float | Sequence[float]] = None,
+    start_q: Optional[np.ndarray] = None,
 ):
     """Alias for ``generate_composite_trajectory`` for API compatibility."""
-    return generate_composite_trajectory(franka, end_effector, waypoints, default_steps, finger_qpos)
+    return generate_composite_trajectory(franka, end_effector, waypoints, default_steps, finger_qpos, start_q)
 
 
 def execute(
@@ -591,7 +601,7 @@ def execute(
     cube,
     logger,
     path,
-    display_video: bool = True,
+    render_cameras: bool = True,
     check_contact: bool = True,
     step_callbacks: Optional[Dict[int, Any]] = None,
     phase_name: str = "",
@@ -607,6 +617,9 @@ def execute(
     slip_threshold: float = None,
 ):
     """Execute a trajectory with optional phase warp and joint shake disturbances, maintaining gripper control via position or force.
+    
+    Args:
+        render_cameras: If True, render OpenCV RGB/depth windows. Set False for headless.
     
     Distance-based slip detection is enabled by default if the logger has been configured with a baseline distance.
     """
@@ -629,7 +642,7 @@ def execute(
         cube,
         logger,
         path2,
-        display_video,
+        render_cameras,
         check_contact,
         step_callbacks,
         phase_name,

@@ -2,7 +2,6 @@
 import numpy as np
 from slipgen.trajectory import (
     execute_trajectory,
-    generate_composite_trajectory,
     execute,
     generate_joint_space_arc_trajectory,
 )
@@ -266,7 +265,8 @@ def run_pick_and_place_demo(
     logger,
     motors_dof,
     fingers_dof,
-    display_video=True,
+    show_viewer=True,
+    render_cameras=True,
     drop_pos=None,
     debug_plot_transfer=True,
     transport_steps=240,
@@ -277,6 +277,10 @@ def run_pick_and_place_demo(
 ):
     """
     Execute pick-and-place for a single cube to a specified drop position.
+    
+    Args:
+        show_viewer: Show Genesis 3D viewer (for scene.step visualization)
+        render_cameras: Render OpenCV RGB/depth camera windows
     
     Transport disturbance parameters:
     - transport_steps: Total steps for transport phase (default 240)
@@ -325,9 +329,9 @@ def run_pick_and_place_demo(
     print(f"[DEBUG] Hover IK with gripper: {q_hover}")
     path = franka.plan_path(qpos_goal=q_hover, num_waypoints=300)
     print(f"[DEBUG] Hover trajectory has {len(path)} waypoints")
-    execute_trajectory(franka, scene, cam, end_effector, cube, logger, path, display_video=display_video, phase_name="Hover",finger_force=np.array([6.0, 6.0]),fingers_dof=fingers_dof, knobs=knobs)
+    execute_trajectory(franka, scene, cam, end_effector, cube, logger, path, render_cameras=render_cameras, phase_name="Hover",finger_force=np.array([6.0, 6.0]),fingers_dof=fingers_dof, knobs=knobs)
 
-    execute_steps(franka, scene, cam, end_effector, cube, logger, num_steps=80, display_video=display_video, phase_name="Hover Stabilize", finger_force=np.array([6.0, 6.0]), fingers_dof=fingers_dof, knobs=knobs)
+    execute_steps(franka, scene, cam, end_effector, cube, logger, num_steps=80, render_cameras=render_cameras, phase_name="Hover Stabilize", finger_force=np.array([6.0, 6.0]), fingers_dof=fingers_dof, knobs=knobs)
 
     approach_target_pos = np.array([
         cube_pos[0] + lateral_offset[0],
@@ -357,7 +361,7 @@ def run_pick_and_place_demo(
         num_steps=150,
         motors_dof=motors_dof,
         qpos=q_approach[:-2],
-        display_video=display_video,
+        render_cameras=render_cameras,
         debug=True,
         phase_name="Approach",
         knobs=knobs,
@@ -384,7 +388,7 @@ def run_pick_and_place_demo(
         print_status=True,
         print_interval=30,
         phase_name="Grasping",
-        display_video=display_video,
+        render_cameras=render_cameras,
         knobs=knobs,
     )
     logger.mark_phase_end("Grasping")
@@ -411,7 +415,7 @@ def run_pick_and_place_demo(
         print_status=True,
         print_interval=25,
         phase_name="Grasp Stabilization",
-        display_video=display_video,
+        render_cameras=render_cameras,
         knobs=knobs,
     )
     logger.mark_phase_end("Grasp Stabilization")
@@ -449,14 +453,13 @@ def run_pick_and_place_demo(
         print_status=True,
         print_interval=50,
         phase_name="Lifting",
-        display_video=display_video,
+        render_cameras=render_cameras,
         knobs=knobs,
     )
     logger.mark_phase_end("Lifting")
 
     hover_drop_z = drop_pos[2] + 0.05
     start_pos = np.array([cube_pos[0], cube_pos[1], lift_height])
-    end_hover_pos = np.array([drop_pos[0], drop_pos[1], hover_drop_z])
     final_drop_pos = np.array([drop_pos[0], drop_pos[1], drop_pos[2]])
 
     q_current_before_transfer = _as_np(franka.get_qpos())
@@ -467,16 +470,17 @@ def run_pick_and_place_demo(
     arc_bias_val = np.random.uniform(-0.03, 0.03)
     
     print(f"[Transfer] Planning joint-space arc trajectory...")
-    print(f"  Start: {start_pos}, End hover: {end_hover_pos}")
+    print(f"  Start: {start_pos}, End: {final_drop_pos}")
     print(f"  Arc height: {arc_height_val:.3f}, Arc bias: {arc_bias_val:.3f}")
     
-    # Generate smooth joint-space trajectory for the arc portion
-    path_arc, arc_debug_info = generate_joint_space_arc_trajectory(
+    # Generate smooth joint-space trajectory for the entire transfer (arc + descent in one)
+    # End position is the final drop position, not an intermediate hover
+    path, arc_debug_info = generate_joint_space_arc_trajectory(
         franka=franka,
         end_effector=end_effector,
         start_q=q_current_before_transfer,
         start_pos=start_pos,
-        end_pos=end_hover_pos,
+        end_pos=final_drop_pos,
         quat_start=quat_grasp,
         quat_end=quat_drop,
         arc_height=arc_height_val,
@@ -487,47 +491,14 @@ def run_pick_and_place_demo(
         num_key_waypoints=7,  # More key points for smoother arc
     )
     
-    # Generate descent portion using the old method (short, less prone to issues)
-    descent_waypoints = [{"pos": final_drop_pos.tolist(), "quat": quat_drop.tolist(), "steps": 90}]
-    
-    # For descent, use composite trajectory starting from end of arc
-    # This is a short, mostly vertical motion that's less prone to IK issues
-    path_descent = generate_composite_trajectory(
-        franka,
-        end_effector,
-        descent_waypoints,
-        default_steps=90,
-        finger_qpos=finger_qpos_for_transport,
-    )
-    
-    # Combine arc and descent trajectories
-    if len(path_arc) > 0 and len(path_descent) > 0:
-        # Ensure smooth transition by checking for jumps
-        arc_end_q = path_arc[-1]
-        descent_start_q = path_descent[0]
-        transition_delta = np.linalg.norm(arc_end_q[:7] - descent_start_q[:7])
-        
-        if transition_delta > 0.3:
-            print(f"[Transfer] Smoothing arc->descent transition (delta={transition_delta:.3f} rad)")
-            n_transition = max(5, int(transition_delta * 10))
-            transition = np.linspace(arc_end_q, descent_start_q, n_transition + 1)[1:-1]
-            path = np.vstack([path_arc, transition, path_descent])
-        else:
-            path = np.vstack([path_arc, path_descent[1:]])  # Skip duplicate first point
-    elif len(path_arc) > 0:
-        path = path_arc
-    else:
-        path = path_descent
-    
     # Build waypoints for debug visualization (reconstruct from arc geometry)
     transfer_waypoints = []
     for wp_info in arc_debug_info.get("key_waypoints", []):
         transfer_waypoints.append({
-            "pos": wp_info["pos"].tolist(),
-            "quat": wp_info["quat"].tolist(),
-            "steps": transport_steps // len(arc_debug_info.get("key_waypoints", [1]))
+            "pos": wp_info["pos"].tolist() if hasattr(wp_info["pos"], "tolist") else list(wp_info["pos"]),
+            "quat": wp_info["quat"].tolist() if hasattr(wp_info["quat"], "tolist") else list(wp_info["quat"]),
+            "steps": transport_steps // max(1, len(arc_debug_info.get("key_waypoints", [1])))
         })
-    transfer_waypoints.append({"pos": final_drop_pos.tolist(), "quat": quat_drop.tolist(), "steps": 90})
     
     debug_trajectory_lines = draw_trajectory_debug(scene, transfer_waypoints, color=(1, 1, 0, 1))
 
@@ -542,7 +513,7 @@ def run_pick_and_place_demo(
 
     logger.mark_phase_start("Transport")
     # Transport uses position control: fingers maintain target position with force cap
-    # The trajectory already contains the target finger positions from generate_composite_trajectory
+    # The trajectory already contains the target finger positions from generate_joint_space_arc_trajectory
     # No separate finger_force commands needed; force cap is enforced in steps.py/trajectory.py
     execute(
         franka,
@@ -552,7 +523,7 @@ def run_pick_and_place_demo(
         cube,
         logger,
         path,
-        display_video=display_video,
+        render_cameras=render_cameras,
         check_contact=True,
         step_callbacks=None,
         phase_name="Transport",
@@ -586,7 +557,7 @@ def run_pick_and_place_demo(
         print_status=True,
         print_interval=40,
         phase_name="Releasing",
-        display_video=display_video,
+        render_cameras=render_cameras,
         knobs=knobs,
     )
     logger.mark_phase_end("Releasing")
@@ -595,7 +566,7 @@ def run_pick_and_place_demo(
     
     # Generate force plot for this pick-and-place cycle
     filename = f"force_plot_cycle{logger.cycle_count}.png"
-    logger.save_force_plot(output_dir=".", filename=filename)
+    # logger.save_force_plot(output_dir=".", filename=filename)
     
     logger.cycle_count += 1
 
@@ -618,7 +589,7 @@ def run_pick_and_place_demo(
         num_steps=130,
         motors_dof=motors_dof,
         qpos=retreat_qpos[:-2],
-        display_video=display_video,
+        render_cameras=render_cameras,
         phase_name="Retreat",
         knobs=knobs,
     )
@@ -633,7 +604,8 @@ def run_iterative_pick_and_place(
     logger,
     motors_dof,
     fingers_dof,
-    display_video=True,
+    show_viewer=True,
+    render_cameras=True,
     transport_steps=240,
     phase_warp_level=0,
     shake_amp=0.0,
@@ -642,6 +614,10 @@ def run_iterative_pick_and_place(
 ):
     """
     Iteratively pick random cubes and place them to the robot's side.
+    
+    Args:
+        show_viewer: Show Genesis 3D viewer (for scene.step visualization)
+        render_cameras: Render OpenCV RGB/depth camera windows
     
     Transport disturbance parameters:
     - transport_steps: Total steps for transport phase (default 240)
@@ -672,7 +648,7 @@ def run_iterative_pick_and_place(
             logger,
             motors_dof,
             fingers_dof,
-            display_video=display_video,
+            render_cameras=render_cameras,
             drop_pos=drop_pos,
             debug_plot_transfer=True,
             transport_steps=transport_steps,

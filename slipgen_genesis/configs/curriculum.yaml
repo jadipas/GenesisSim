@@ -1,4 +1,0 @@
-# Curriculum configuration for sweeps/dataset
-num_samples: 10
-hover_offset: 0.20
-lift_offset: 0.15
