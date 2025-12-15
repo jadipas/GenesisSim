@@ -106,11 +106,6 @@ class Logger:
         if phase_name not in self.phase_markers:
             self.phase_markers[phase_name] = {}
         self.phase_markers[phase_name]['end'] = self.timestep
-        
-        if phase_name == 'Grasping':
-            phase_start = self.phase_markers[phase_name].get('start', 0)
-            phase_end = self.phase_markers[phase_name].get('end', self.timestep)
-            self.grasp_phase_contact = self.data['in_contact'][phase_start:phase_end]
     
     def get_slippage_metrics(self) -> Dict[str, Any]:
         """Get detailed slippage metrics for the pick-and-place task."""

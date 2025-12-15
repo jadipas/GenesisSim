@@ -61,7 +61,11 @@ def generate_composite_trajectory(
 
 def execute_trajectory(franka, scene, cam, end_effector, cube, logger, 
                        path, display_video=True, check_contact=True, step_callbacks=None, phase_name="", debug=False, knobs=None, finger_force=None, fingers_dof=None):
-    """Execute a planned trajectory with sensor data collection and optional gripper force maintenance."""
+    """Execute a planned trajectory with sensor data collection and optional gripper force maintenance.
+
+    If ``finger_force`` and ``fingers_dof`` are provided, a clamped holding force is applied
+    every step in addition to joint position targets to sustain grip through the phase.
+    """
     callbacks = {}
     if step_callbacks:
         if isinstance(step_callbacks, dict):
@@ -76,10 +80,21 @@ def execute_trajectory(franka, scene, cam, end_effector, cube, logger,
     if phase_name:
         print(f"{phase_name}...")
     
+    # Prepare clamped holding force once (if provided)
+    clamped_force = None
+    if finger_force is not None and fingers_dof is not None:
+        clamped_force = np.asarray(finger_force, dtype=float)
+        if knobs is not None and hasattr(knobs, 'fn_cap'):
+            cap = float(knobs.fn_cap)
+            clamped_force = np.clip(clamped_force, -cap, cap)
+    
     for step_idx, waypoint in enumerate(path):
         # Apply joint shake during Transport phase if disturbance is enabled
         # Note: shake parameters should be passed via step_callbacks or similar if needed
         franka.control_dofs_position(waypoint)
+        # Sustain gripper holding force (if requested)
+        if clamped_force is not None:
+            franka.control_dofs_force(clamped_force, fingers_dof)
         scene.step()
         update_wrist_camera(cam, end_effector)
         

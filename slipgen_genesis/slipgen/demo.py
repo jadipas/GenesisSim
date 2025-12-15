@@ -377,6 +377,37 @@ def run_pick_and_place_demo(
     )
     logger.mark_phase_end("Grasping")
 
+    # Stabilize gripper: hold arm in place and let gripper force settle before transport
+    logger.mark_phase_start("Grasp Stabilization")
+    q_current = franka.get_qpos()
+    if hasattr(q_current, 'cpu'):
+        q_current = q_current.cpu().numpy()
+    execute_steps(
+        franka,
+        scene,
+        cam,
+        end_effector,
+        cube,
+        logger,
+        num_steps=100,
+        motors_dof=motors_dof,
+        qpos=q_current[:-2],  
+        finger_force=np.array([-15.0, -15.0]),  
+        fingers_dof=fingers_dof,
+        print_status=True,
+        print_interval=25,
+        phase_name="Grasp Stabilization",
+        display_video=display_video,
+        knobs=knobs,
+    )
+    logger.mark_phase_end("Grasp Stabilization")
+
+    # Capture final gripper position for transport (position control)
+    q_stable = franka.get_qpos()
+    if hasattr(q_stable, 'cpu'):
+        q_stable = q_stable.cpu().numpy()
+    finger_qpos_for_transport = q_stable[-2:]  # Lock fingers at this position during transport
+
     q_lift = franka.inverse_kinematics(
         link=end_effector,
         pos=np.array([cube_pos[0], cube_pos[1], lift_height]),
@@ -420,13 +451,13 @@ def run_pick_and_place_demo(
 
     q_current_before_transfer = _as_np(franka.get_qpos())
     
-    # Generate trajectory with gripper closed (fingers at 0.0)
+    # Generate trajectory with gripper position-locked at stabilized position
     path = generate_composite_trajectory(
         franka,
         end_effector,
         transfer_waypoints,
         default_steps=150,
-        finger_qpos=0.0,  # Keep gripper closed during transport
+        finger_qpos=finger_qpos_for_transport,  # Lock gripper at stabilized position during transport
     )
 
     if len(path) > 0:
@@ -443,7 +474,8 @@ def run_pick_and_place_demo(
 
     logger.mark_phase_start("Transport")
     # Use execute() with disturbance parameters for repeatable slip stress
-    # Maintain gripper force (currently set to 0 during grasping, need to preserve from last grasp)
+    # Gripper now uses position control (locked at stabilized position)
+    # The path already contains the locked finger positions from generate_composite_trajectory
     execute(
         franka,
         scene,
@@ -461,7 +493,7 @@ def run_pick_and_place_demo(
         shake_amp=shake_amp,              # Apply joint shake for inertial disturbance
         shake_freq=shake_freq,
         knobs=knobs,
-        finger_force=np.array([6.0, 6.0]),  # Maintain grip during transport
+        finger_force=np.array([-15.0, -15.0]),  
         fingers_dof=fingers_dof,
     )
     logger.mark_phase_end("Transport")
