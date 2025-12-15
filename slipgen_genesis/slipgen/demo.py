@@ -268,6 +268,7 @@ def run_pick_and_place_demo(
     phase_warp_level=0,
     shake_amp=0.0,
     shake_freq=6.0,
+    knobs=None,
 ):
     """
     Execute pick-and-place for a single cube to a specified drop position.
@@ -320,7 +321,7 @@ def run_pick_and_place_demo(
     print(f"[DEBUG] Hover trajectory has {len(path)} waypoints")
     execute_trajectory(franka, scene, cam, end_effector, cube, logger, path, display_video=display_video, phase_name="Hover")
 
-    execute_steps(franka, scene, cam, end_effector, cube, logger, num_steps=80, display_video=display_video, phase_name="Hover Stabilize")
+    execute_steps(franka, scene, cam, end_effector, cube, logger, num_steps=80, display_video=display_video, phase_name="Hover Stabilize", knobs=knobs)
 
     approach_target_pos = np.array([
         cube_pos[0] + lateral_offset[0],
@@ -352,6 +353,7 @@ def run_pick_and_place_demo(
         display_video=display_video,
         debug=True,
         phase_name="Approach",
+        knobs=knobs,
     )
 
     logger.mark_phase_start("Grasping")
@@ -365,12 +367,13 @@ def run_pick_and_place_demo(
         num_steps=150,
         motors_dof=motors_dof,
         qpos=q_approach[:-2],
-        finger_force=np.array([-0.5, -0.5]),
+        finger_force=np.array([-15.0, -15.0]),
         fingers_dof=fingers_dof,
         print_status=True,
         print_interval=30,
         phase_name="Grasping",
         display_video=display_video,
+        knobs=knobs,
     )
     logger.mark_phase_end("Grasping")
 
@@ -393,6 +396,7 @@ def run_pick_and_place_demo(
         print_interval=50,
         phase_name="Lifting",
         display_video=display_video,
+        knobs=knobs,
     )
 
     hover_drop_z = drop_pos[2] + 0.05
@@ -439,6 +443,7 @@ def run_pick_and_place_demo(
 
     logger.mark_phase_start("Transport")
     # Use execute() with disturbance parameters for repeatable slip stress
+    # Maintain gripper force (currently set to 0 during grasping, need to preserve from last grasp)
     execute(
         franka,
         scene,
@@ -455,6 +460,9 @@ def run_pick_and_place_demo(
         disturb_level=phase_warp_level,  # Apply phase warp for speed variation
         shake_amp=shake_amp,              # Apply joint shake for inertial disturbance
         shake_freq=shake_freq,
+        knobs=knobs,
+        finger_force=np.array([6.0, 6.0]),  # Maintain grip during transport
+        fingers_dof=fingers_dof,
     )
     logger.mark_phase_end("Transport")
 
@@ -471,12 +479,13 @@ def run_pick_and_place_demo(
         num_steps=150,
         motors_dof=motors_dof,
         qpos=final_arm_qpos,
-        finger_force=np.array([0.6, 0.6]),
+        finger_force=np.array([6.0, 6.0]),
         fingers_dof=fingers_dof,
         print_status=True,
         print_interval=40,
         phase_name="Releasing",
         display_video=display_video,
+        knobs=knobs,
     )
     logger.mark_phase_end("Releasing")
     
@@ -508,6 +517,7 @@ def run_pick_and_place_demo(
         qpos=retreat_qpos[:-2],
         display_video=display_video,
         phase_name="Retreat",
+        knobs=knobs,
     )
 
 
@@ -525,6 +535,7 @@ def run_iterative_pick_and_place(
     phase_warp_level=0,
     shake_amp=0.0,
     shake_freq=6.0,
+    knobs=None,
 ):
     """
     Iteratively pick random cubes and place them to the robot's side.
@@ -565,6 +576,7 @@ def run_iterative_pick_and_place(
             phase_warp_level=phase_warp_level,
             shake_amp=shake_amp,
             shake_freq=shake_freq,
+            knobs=knobs,
         )
 
         try:

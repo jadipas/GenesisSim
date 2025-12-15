@@ -60,8 +60,8 @@ def generate_composite_trajectory(
 
 
 def execute_trajectory(franka, scene, cam, end_effector, cube, logger, 
-                       path, display_video=True, check_contact=True, step_callbacks=None, phase_name="", debug=False):
-    """Execute a planned trajectory with sensor data collection."""
+                       path, display_video=True, check_contact=True, step_callbacks=None, phase_name="", debug=False, knobs=None, finger_force=None, fingers_dof=None):
+    """Execute a planned trajectory with sensor data collection and optional gripper force maintenance."""
     callbacks = {}
     if step_callbacks:
         if isinstance(step_callbacks, dict):
@@ -204,8 +204,11 @@ def execute(
     disturb_level: int = 0,
     shake_amp: float = 0.0,
     shake_freq: float = 6.0,
+    knobs=None,
+    finger_force=None,
+    fingers_dof=None,
 ):
-    """Execute a trajectory with optional phase warp and joint shake disturbances."""
+    """Execute a trajectory with optional phase warp and joint shake disturbances, maintaining gripper force."""
     path2 = apply_phase_warp_bump(np.asarray(path), disturb_level)
     
     # Apply joint shake during transport if enabled
@@ -230,4 +233,7 @@ def execute(
         step_callbacks,
         phase_name,
         debug,
+        knobs=knobs,
+        finger_force=finger_force,
+        fingers_dof=fingers_dof,
     )

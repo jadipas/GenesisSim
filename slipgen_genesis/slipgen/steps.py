@@ -1,4 +1,5 @@
 """Step-by-step execution functionality."""
+import numpy as np
 import cv2
 from slipgen.camera import update_wrist_camera
 from slipgen.data_collection import collect_sensor_data
@@ -6,7 +7,7 @@ from slipgen.data_collection import collect_sensor_data
 
 def execute_steps(franka, scene, cam, end_effector, cube, logger, 
                  num_steps, motors_dof=None, qpos=None, finger_force=None, fingers_dof=None,
-                 display_video=True, print_status=False, print_interval=20, phase_name="", debug=False):
+                 display_video=True, print_status=False, print_interval=20, phase_name="", debug=False, knobs=None):
     """Execute simulation steps with sensor data collection."""
     if phase_name:
         print(f"{phase_name}...")
@@ -14,10 +15,20 @@ def execute_steps(franka, scene, cam, end_effector, cube, logger,
     if qpos is not None and motors_dof is not None:
         franka.control_dofs_position(qpos, motors_dof)
     
-    if finger_force is not None and fingers_dof is not None:
-        franka.control_dofs_force(finger_force, fingers_dof)
+    # Clamp finger force to knob's fn_cap if knobs provided (only log once at start)
+    clamped_force = finger_force
+    clamp_logged = False
+    if finger_force is not None and knobs is not None and hasattr(knobs, 'fn_cap'):
+        clamped_force = np.clip(finger_force, -knobs.fn_cap, knobs.fn_cap)
+        if not np.allclose(finger_force, clamped_force):
+            print(f"  [Force Clamp] Requested {finger_force}, clamped to [{-knobs.fn_cap:.1f}, {knobs.fn_cap:.1f}] -> {clamped_force}")
+            clamp_logged = True
     
     for i in range(num_steps):
+        # Re-apply clamped force every step (in case Genesis doesn't enforce it)
+        if clamped_force is not None and fingers_dof is not None:
+            franka.control_dofs_force(clamped_force, fingers_dof)
+        
         scene.step()
         update_wrist_camera(cam, end_effector)
         

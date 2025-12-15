@@ -154,10 +154,10 @@ def configure_robot(franka, preset="default"):
     )
 
 
-def init_scene(show_viewer: bool = True):
+def init_scene(show_viewer: bool = True, cube_area=None) -> Tuple:
     """One-time scene initialization: create scene, spawn entities, build once."""
     scene = setup_scene(show_viewer=show_viewer)
-    plane, cubes, franka = setup_entities(scene, num_cubes=3)
+    plane, cubes, franka = setup_entities(scene, num_cubes=3, cube_area=cube_area)
     cam = setup_camera(scene)
     
     # Build the scene (expensive operation - only once)
@@ -206,8 +206,8 @@ def apply_knobs(knobs: SlipKnobs, scene, franka, cubes, fingers_dof):
             np.array([-87, -87, -87, -87, -12, -12, -12, -knobs.fn_cap, -knobs.fn_cap]),
             np.array([ 87,  87,  87,  87,  12,  12,  12,  knobs.fn_cap,  knobs.fn_cap]),
         )
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [Warning] Failed to set finger force cap: {e}")
 
 
 def setup_with_knobs(knobs: SlipKnobs, show_viewer: bool = True):
@@ -215,3 +215,22 @@ def setup_with_knobs(knobs: SlipKnobs, show_viewer: bool = True):
     scene, franka, cam, end_effector, cubes, motors_dof, fingers_dof = init_scene(show_viewer=show_viewer)
     apply_knobs(knobs, scene, franka, cubes, fingers_dof)
     return scene, franka, cam, end_effector, cubes, motors_dof, fingers_dof
+
+def reset_cube_positions(cubes, cube_area = None):
+    """Reset cube positions to specified locations."""
+    cube_area = cube_area or {
+        "x_range": (0.35, 0.55),
+        "y_range": (-0.55, -0.05),
+        "z": 0.035,
+        "min_separation": 0.08,
+    }
+    cube_positions = _sample_cube_positions(
+        len(cubes),
+        cube_area["x_range"],
+        cube_area["y_range"],
+        cube_area["z"],
+        cube_area["min_separation"],
+    )
+
+    for cube, pos in zip(cubes, cube_positions):
+        cube.set_pos(pos)

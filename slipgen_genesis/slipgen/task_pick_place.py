@@ -5,7 +5,7 @@ import numpy as np
 from slipgen.demo import run_iterative_pick_and_place, run_pick_and_place_demo
 from slipgen.logger import Logger
 from slipgen.knobs import SlipKnobs
-from slipgen.scene import setup_with_knobs
+from slipgen.scene import setup_with_knobs, reset_cube_positions
 
 
 def run_pick_place_sweep(num_cubes: int = 3, display_video: bool = True,
@@ -15,8 +15,13 @@ def run_pick_place_sweep(num_cubes: int = 3, display_video: bool = True,
     
     # One-time expensive scene initialization
     print("Initializing scene (one-time build)...")
-    scene, franka, cam, end_effector, cubes, motors_dof, fingers_dof = init_scene(show_viewer=display_video)
-    
+    cube_area = {
+        "x_range": (0.35, 0.55),
+        "y_range": (-0.55, -0.05),
+        "z": 0.035,
+        "min_separation": 0.08,
+    }
+    scene, franka, cam, end_effector, cubes, motors_dof, fingers_dof = init_scene(show_viewer=display_video, cube_area=cube_area)
     results = []
     total_configs = len(mu_vals) * len(fn_caps) * len(disturb_levels)
     config_idx = 0
@@ -32,7 +37,7 @@ def run_pick_place_sweep(num_cubes: int = 3, display_video: bool = True,
                 
                 logger = Logger()
                 # TODO: Pass disturb_level to demo to enable trajectory disturbance
-                run_iterative_pick_and_place(franka, scene, cam, end_effector, cubes, logger, motors_dof, fingers_dof, display_video=display_video)
+                run_iterative_pick_and_place(franka, scene, cam, end_effector, cubes, logger, motors_dof, fingers_dof, display_video=display_video, knobs=knobs)
                 stats = logger.get_slippage_metrics()
                 results.append({'mu': mu, 'fn_cap': fn, 'disturb': d, **stats})
                 print(f"  Result: {stats}")
@@ -40,6 +45,7 @@ def run_pick_place_sweep(num_cubes: int = 3, display_video: bool = True,
                 # Save force plot for this configuration
                 filename = f"force_plot_sweep_mu{mu}_fn{fn}_d{d}.png"
                 logger.save_force_plot(output_dir=".", filename=filename)
+                reset_cube_positions(cubes, cube_area)
     
     print(f"\nSweep finished: tested {total_configs} configurations.")
     return results
@@ -55,7 +61,7 @@ def generate_dataset(num_samples: int = 10, display_video: bool = False,
         cube = cubes[i % len(cubes)]
         drop_pos = np.array([0.55, 0.38, 0.14])
         run_pick_and_place_demo(franka, scene, cam, end_effector, cube, logger, motors_dof, fingers_dof,
-                                display_video=display_video, drop_pos=drop_pos)
+                                display_video=display_video, drop_pos=drop_pos, knobs=knobs)
     logger.save(save_path)
     
     # Save final force plot for entire dataset
