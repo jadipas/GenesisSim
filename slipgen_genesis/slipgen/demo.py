@@ -1,6 +1,11 @@
 """Pick-and-place demonstration functionality."""
 import numpy as np
-from slipgen.trajectory import execute_trajectory, generate_composite_trajectory, execute
+from slipgen.trajectory import (
+    execute_trajectory,
+    generate_composite_trajectory,
+    execute,
+    generate_joint_space_arc_trajectory,
+)
 from slipgen.steps import execute_steps
 from slipgen.debug_utils import (
     print_ik_target_vs_current,
@@ -314,6 +319,7 @@ def run_pick_and_place_demo(
         pos=hover_target_pos,
         quat=quat_grasp,
     )
+    q_hover = _as_np(q_hover)
     print(f"[DEBUG] Hover IK result: {q_hover}")
     q_hover[-2:] = 0.04
     print(f"[DEBUG] Hover IK with gripper: {q_hover}")
@@ -335,6 +341,7 @@ def run_pick_and_place_demo(
         pos=approach_target_pos,
         quat=quat_grasp,
     )
+    q_approach = _as_np(q_approach)
     print(f"[DEBUG] Approach IK result: {q_approach}")
     q_current = franka.get_qpos()
     if hasattr(q_current, 'cpu'):
@@ -357,6 +364,11 @@ def run_pick_and_place_demo(
     )
 
     logger.mark_phase_start("Grasping")
+    # Set finger position target from knobs (default -0.04 for closure)
+    q_finger_target = knobs.q_finger_target if knobs is not None else -0.04
+    q_grasp = _as_np(q_approach).copy()
+    q_grasp[-2:] = q_finger_target
+    
     execute_steps(
         franka,
         scene,
@@ -366,8 +378,8 @@ def run_pick_and_place_demo(
         logger,
         num_steps=150,
         motors_dof=motors_dof,
-        qpos=q_approach[:-2],
-        finger_force=np.array([-15.0, -15.0]),
+        qpos=q_grasp[:-2],
+        finger_qpos=np.array([q_finger_target, q_finger_target]),
         fingers_dof=fingers_dof,
         print_status=True,
         print_interval=30,
@@ -377,11 +389,13 @@ def run_pick_and_place_demo(
     )
     logger.mark_phase_end("Grasping")
 
-    # Stabilize gripper: hold arm in place and let gripper force settle before transport
+    # Stabilize gripper: hold arm and finger position in place, with force cap active
     logger.mark_phase_start("Grasp Stabilization")
     q_current = franka.get_qpos()
     if hasattr(q_current, 'cpu'):
         q_current = q_current.cpu().numpy()
+    q_finger_target = knobs.q_finger_target if knobs is not None else -0.04
+    
     execute_steps(
         franka,
         scene,
@@ -391,8 +405,8 @@ def run_pick_and_place_demo(
         logger,
         num_steps=100,
         motors_dof=motors_dof,
-        qpos=q_current[:-2],  
-        finger_force=np.array([-15.0, -15.0]),  
+        qpos=q_current[:-2],
+        finger_qpos=np.array([q_finger_target, q_finger_target]),
         fingers_dof=fingers_dof,
         print_status=True,
         print_interval=25,
@@ -402,17 +416,26 @@ def run_pick_and_place_demo(
     )
     logger.mark_phase_end("Grasp Stabilization")
 
-    # Capture final gripper position for transport (position control)
-    q_stable = franka.get_qpos()
-    if hasattr(q_stable, 'cpu'):
-        q_stable = q_stable.cpu().numpy()
-    finger_qpos_for_transport = q_stable[-2:]  # Lock fingers at this position during transport
+    # Setup distance-based slip detection
+    # Capture baseline EE-cube distance now that grasp is stable
+    last_sensor_data = {
+        'obj_pos': _as_np(cube.get_pos()),
+        'ee_pos': _as_np(end_effector.get_pos()),
+    }
+    baseline_distance = float(np.linalg.norm(last_sensor_data['obj_pos'] - last_sensor_data['ee_pos']))
+    logger.capture_grasp_baseline(baseline_distance)
+    logger.set_slip_active_phases(["Lifting", "Transport"])
+
+    # Use target finger position for transport phase
+    finger_qpos_for_transport = np.array([q_finger_target, q_finger_target])
 
     q_lift = franka.inverse_kinematics(
         link=end_effector,
         pos=np.array([cube_pos[0], cube_pos[1], lift_height]),
         quat=quat_grasp,
     )
+    q_lift = _as_np(q_lift)
+    logger.mark_phase_start("Lifting")
     execute_steps(
         franka,
         scene,
@@ -429,53 +452,98 @@ def run_pick_and_place_demo(
         display_video=display_video,
         knobs=knobs,
     )
+    logger.mark_phase_end("Lifting")
 
     hover_drop_z = drop_pos[2] + 0.05
     start_pos = np.array([cube_pos[0], cube_pos[1], lift_height])
     end_hover_pos = np.array([drop_pos[0], drop_pos[1], hover_drop_z])
-
-    transfer_waypoints = _generate_arc_transfer_waypoints(
-        start_pos=start_pos,
-        end_pos=end_hover_pos,
-        quat=quat_grasp,
-        quat_end=quat_drop,
-        arc_height=np.random.uniform(0.55, 0.65),
-        num_points=48,
-        target_total_steps=transport_steps,  # Now configurable (default 240)
-        arc_bias=np.random.uniform(-0.03, 0.03),  # Lateral curvature for tangential stress
-    )
-
-    transfer_waypoints.append({"pos": [drop_pos[0], drop_pos[1], drop_pos[2]], "quat": quat_drop, "steps": 90})
-
-    debug_trajectory_lines = draw_trajectory_debug(scene, transfer_waypoints, color=(1, 1, 0, 1))
+    final_drop_pos = np.array([drop_pos[0], drop_pos[1], drop_pos[2]])
 
     q_current_before_transfer = _as_np(franka.get_qpos())
     
-    # Generate trajectory with gripper position-locked at stabilized position
-    path = generate_composite_trajectory(
+    # Use joint-space trajectory planning instead of per-waypoint IK
+    # This avoids IK discontinuities that cause large joint jumps
+    arc_height_val = np.random.uniform(0.55, 0.65)
+    arc_bias_val = np.random.uniform(-0.03, 0.03)
+    
+    print(f"[Transfer] Planning joint-space arc trajectory...")
+    print(f"  Start: {start_pos}, End hover: {end_hover_pos}")
+    print(f"  Arc height: {arc_height_val:.3f}, Arc bias: {arc_bias_val:.3f}")
+    
+    # Generate smooth joint-space trajectory for the arc portion
+    path_arc, arc_debug_info = generate_joint_space_arc_trajectory(
+        franka=franka,
+        end_effector=end_effector,
+        start_q=q_current_before_transfer,
+        start_pos=start_pos,
+        end_pos=end_hover_pos,
+        quat_start=quat_grasp,
+        quat_end=quat_drop,
+        arc_height=arc_height_val,
+        arc_bias=arc_bias_val,
+        total_steps=transport_steps,
+        finger_qpos=finger_qpos_for_transport,
+        max_cartesian_deviation=0.15,  # Allow up to 15cm deviation from ideal arc
+        num_key_waypoints=7,  # More key points for smoother arc
+    )
+    
+    # Generate descent portion using the old method (short, less prone to issues)
+    descent_waypoints = [{"pos": final_drop_pos.tolist(), "quat": quat_drop.tolist(), "steps": 90}]
+    
+    # For descent, use composite trajectory starting from end of arc
+    # This is a short, mostly vertical motion that's less prone to IK issues
+    path_descent = generate_composite_trajectory(
         franka,
         end_effector,
-        transfer_waypoints,
-        default_steps=150,
-        finger_qpos=finger_qpos_for_transport,  # Lock gripper at stabilized position during transport
+        descent_waypoints,
+        default_steps=90,
+        finger_qpos=finger_qpos_for_transport,
     )
-
-    if len(path) > 0:
-        first_q = path[0]
-        joint_delta = np.linalg.norm(q_current_before_transfer[:7] - first_q[:7])
-        if joint_delta > 0.5:
-            print(f"[DEBUG] Large IK jump at transport start (delta={joint_delta:.3f} rad). Inserting smooth transition.")
-            n_transition = 15
-            transition = np.linspace(q_current_before_transfer, first_q, n_transition + 1)[1:]
-            path = np.vstack([transition, path])
+    
+    # Combine arc and descent trajectories
+    if len(path_arc) > 0 and len(path_descent) > 0:
+        # Ensure smooth transition by checking for jumps
+        arc_end_q = path_arc[-1]
+        descent_start_q = path_descent[0]
+        transition_delta = np.linalg.norm(arc_end_q[:7] - descent_start_q[:7])
+        
+        if transition_delta > 0.3:
+            print(f"[Transfer] Smoothing arc->descent transition (delta={transition_delta:.3f} rad)")
+            n_transition = max(5, int(transition_delta * 10))
+            transition = np.linspace(arc_end_q, descent_start_q, n_transition + 1)[1:-1]
+            path = np.vstack([path_arc, transition, path_descent])
+        else:
+            path = np.vstack([path_arc, path_descent[1:]])  # Skip duplicate first point
+    elif len(path_arc) > 0:
+        path = path_arc
+    else:
+        path = path_descent
+    
+    # Build waypoints for debug visualization (reconstruct from arc geometry)
+    transfer_waypoints = []
+    for wp_info in arc_debug_info.get("key_waypoints", []):
+        transfer_waypoints.append({
+            "pos": wp_info["pos"].tolist(),
+            "quat": wp_info["quat"].tolist(),
+            "steps": transport_steps // len(arc_debug_info.get("key_waypoints", [1]))
+        })
+    transfer_waypoints.append({"pos": final_drop_pos.tolist(), "quat": quat_drop.tolist(), "steps": 90})
+    
+    debug_trajectory_lines = draw_trajectory_debug(scene, transfer_waypoints, color=(1, 1, 0, 1))
 
     if debug_plot_transfer:
         log_transfer_debug(transfer_waypoints, path, franka, end_effector)
+    
+    # Log FK verification results
+    if arc_debug_info.get("fk_deviations"):
+        print(f"[Transfer] FK verification: max deviation = {arc_debug_info['max_deviation']:.4f}m")
+        if not arc_debug_info.get("verification_passed", True):
+            print(f"[Transfer] WARNING: Trajectory deviates significantly from planned Cartesian path!")
 
     logger.mark_phase_start("Transport")
-    # Use execute() with disturbance parameters for repeatable slip stress
-    # Gripper now uses position control (locked at stabilized position)
-    # The path already contains the locked finger positions from generate_composite_trajectory
+    # Transport uses position control: fingers maintain target position with force cap
+    # The trajectory already contains the target finger positions from generate_composite_trajectory
+    # No separate finger_force commands needed; force cap is enforced in steps.py/trajectory.py
     execute(
         franka,
         scene,
@@ -493,12 +561,14 @@ def run_pick_and_place_demo(
         shake_amp=shake_amp,              # Apply joint shake for inertial disturbance
         shake_freq=shake_freq,
         knobs=knobs,
-        finger_force=np.array([-15.0, -15.0]),  
+        finger_qpos=finger_qpos_for_transport,
         fingers_dof=fingers_dof,
     )
     logger.mark_phase_end("Transport")
 
+    # Release: open fingers via position target (force cap still active)
     final_arm_qpos = path[-1][:-2]
+    q_finger_open = 0.04  # Open position
 
     logger.mark_phase_start("Releasing")
     execute_steps(
@@ -511,7 +581,7 @@ def run_pick_and_place_demo(
         num_steps=150,
         motors_dof=motors_dof,
         qpos=final_arm_qpos,
-        finger_force=np.array([6.0, 6.0]),
+        finger_qpos=np.array([q_finger_open, q_finger_open]),
         fingers_dof=fingers_dof,
         print_status=True,
         print_interval=40,
@@ -536,6 +606,7 @@ def run_pick_and_place_demo(
         pos=np.array([drop_pos[0], drop_pos[1], drop_pos[2] + 0.16]),
         quat=quat_drop,
     )
+    retreat_qpos = _as_np(retreat_qpos)
     retreat_qpos[-2:] = 0.04
     execute_steps(
         franka,

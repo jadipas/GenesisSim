@@ -1,6 +1,6 @@
 """Contact detection functionality (stubbed)."""
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 def _to_np(x):
@@ -9,6 +9,61 @@ def _to_np(x):
     if hasattr(x, "cpu"):
         return x.cpu().numpy()
     return np.asarray(x)
+
+
+# Default slip detection threshold in meters (5cm)
+DEFAULT_SLIP_THRESHOLD = 0.05
+
+
+def detect_slip_by_distance(
+    cube_pos: np.ndarray,
+    ee_pos: np.ndarray,
+    baseline_distance: float,
+    threshold: float = DEFAULT_SLIP_THRESHOLD,
+) -> Dict[str, Any]:
+    """Detect slip based on relative distance change between cube and gripper.
+    
+    This is more reliable than force-based detection in simulation environments.
+    Slip is detected when the cube-to-end-effector distance deviates from the
+    baseline distance captured at grasp by more than the threshold.
+    
+    Args:
+        cube_pos: Current cube position [x, y, z] in world frame
+        ee_pos: Current end-effector position [x, y, z] in world frame
+        baseline_distance: Distance captured at initial secure grasp (meters)
+        threshold: Max allowed displacement before slip is flagged (meters)
+                   Default: 0.015m (1.5cm) - tune based on cube size
+                   Conservative: 0.005m (5mm) - catches minor slippage
+                   Permissive: 0.020m+ (2cm+) - only catches significant drops
+    
+    Returns:
+        dict with slip detection results:
+            - slip_detected: bool, True if slip threshold exceeded
+            - displacement_from_baseline: float, absolute distance change (m)
+            - current_ee_cube_distance: float, current distance (m)
+            - slip_threshold: float, threshold used (m)
+            - vertical_slip: float, vertical displacement component (m)
+            - horizontal_slip: float, horizontal displacement component (m)
+    """
+    cube_pos = _to_np(cube_pos)
+    ee_pos = _to_np(ee_pos)
+    
+    current_distance = float(np.linalg.norm(cube_pos - ee_pos))
+    displacement = abs(current_distance - baseline_distance)
+    
+    # Decompose into vertical and horizontal components for diagnostics
+    relative_pos = cube_pos - ee_pos
+    vertical_component = abs(relative_pos[2])  # Z-axis
+    horizontal_component = float(np.linalg.norm(relative_pos[:2]))  # XY-plane
+    
+    return {
+        'slip_detected': displacement > threshold,
+        'displacement_from_baseline': displacement,
+        'current_ee_cube_distance': current_distance,
+        'slip_threshold': threshold,
+        'vertical_slip': vertical_component,
+        'horizontal_slip': horizontal_component,
+    }
 
 
 def detect_contact_with_object(franka, end_effector, cube) -> Dict[str, Any]:

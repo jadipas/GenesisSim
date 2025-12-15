@@ -14,6 +14,7 @@ class PickPlaceKnobs:
 @dataclass
 class SlipKnobs:
     # Core slip generator knobs
-    mu: float = 0.6            # contact friction
-    fn_cap: float = 5.0        # max normal force per finger [N]
-    disturb_level: int = 0     # 0=no bump, 1..3 increasing severity
+    mu: float = 0.6                # contact friction
+    fn_cap: float = 5.0            # max normal force per finger [N]
+    q_finger_target: float = -0.04 # finger position target during grasp (negative = closure)
+    disturb_level: int = 0         # 0=no bump, 1..3 increasing severity
