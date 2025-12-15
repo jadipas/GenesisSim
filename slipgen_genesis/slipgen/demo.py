@@ -319,9 +319,9 @@ def run_pick_and_place_demo(
     print(f"[DEBUG] Hover IK with gripper: {q_hover}")
     path = franka.plan_path(qpos_goal=q_hover, num_waypoints=300)
     print(f"[DEBUG] Hover trajectory has {len(path)} waypoints")
-    execute_trajectory(franka, scene, cam, end_effector, cube, logger, path, display_video=display_video, phase_name="Hover")
+    execute_trajectory(franka, scene, cam, end_effector, cube, logger, path, display_video=display_video, phase_name="Hover",finger_force=np.array([6.0, 6.0]),fingers_dof=fingers_dof, knobs=knobs)
 
-    execute_steps(franka, scene, cam, end_effector, cube, logger, num_steps=80, display_video=display_video, phase_name="Hover Stabilize", knobs=knobs)
+    execute_steps(franka, scene, cam, end_effector, cube, logger, num_steps=80, display_video=display_video, phase_name="Hover Stabilize", finger_force=np.array([6.0, 6.0]), fingers_dof=fingers_dof, knobs=knobs)
 
     approach_target_pos = np.array([
         cube_pos[0] + lateral_offset[0],
@@ -440,7 +440,7 @@ def run_pick_and_place_demo(
         quat=quat_grasp,
         quat_end=quat_drop,
         arc_height=np.random.uniform(0.55, 0.65),
-        num_points=24,
+        num_points=48,
         target_total_steps=transport_steps,  # Now configurable (default 240)
         arc_bias=np.random.uniform(-0.03, 0.03),  # Lateral curvature for tangential stress
     )
