@@ -5,7 +5,7 @@ import numpy as np
 from slipgen.demo import run_iterative_pick_and_place, run_pick_and_place_demo
 from slipgen.logger import Logger
 from slipgen.knobs import SlipKnobs
-from slipgen.scene import setup_with_knobs, reset_cube_positions
+from slipgen.scene import setup_with_knobs, reset_cube_positions, scatter_cubes
 
 
 def run_pick_place_sweep(num_cubes: int = 3, show_viewer: bool = True, render_cameras: bool = True,
@@ -62,7 +62,7 @@ def run_pick_place_sweep(num_cubes: int = 3, show_viewer: bool = True, render_ca
 
 
 def generate_dataset(num_samples: int = 10, show_viewer: bool = False, render_cameras: bool = False,
-                     mu: float = 0.6, fn_cap: float = 5.0, disturb_level: int = 1,
+                     mu: float = 0.6, fn_cap: float = 5.0, q_finger_target: float = -0.03, disturb_level: int = 1, min_cubes=3, max_cubes=5,
                      save_path: str = "sensor_data.npz"):
     """Generate dataset from pick-and-place runs.
     
@@ -75,14 +75,25 @@ def generate_dataset(num_samples: int = 10, show_viewer: bool = False, render_ca
         disturb_level: Disturbance level
         save_path: Path to save the sensor data
     """
-    knobs = SlipKnobs(mu=mu, fn_cap=fn_cap, disturb_level=disturb_level)
-    scene, franka, cam, end_effector, cubes, motors_dof, fingers_dof = setup_with_knobs(knobs, show_viewer=show_viewer)
+    knobs = SlipKnobs(mu=mu, fn_cap=fn_cap, disturb_level=disturb_level, q_finger_target=q_finger_target)
+    cube_area = {
+        "x_range": (0.35, 0.55),
+        "y_range": (-0.55, -0.05),
+        "z": 0.035,
+        "min_separation": 0.08,
+    }
+    scene, franka, cam, end_effector, cubes, motors_dof, fingers_dof = setup_with_knobs(knobs, show_viewer=show_viewer, cube_area=cube_area, num_cubes=max_cubes)
+    scatter_cubes(cubes)
     logger = Logger()
-    for i in range(num_samples):
-        cube = cubes[i % len(cubes)]
+    while num_samples > 0:
+        sample = np.random.randint(min_cubes, max_cubes + 1)
+        num_samples -= sample
+        scubes = cubes[:sample]
+        reset_cube_positions(scubes, cube_area)
         drop_pos = np.array([0.55, 0.38, 0.14])
-        run_pick_and_place_demo(franka, scene, cam, end_effector, cube, logger, motors_dof, fingers_dof,
-                                show_viewer=show_viewer, render_cameras=render_cameras, drop_pos=drop_pos, knobs=knobs)
+        run_iterative_pick_and_place(franka, scene, cam, end_effector, scubes, logger, motors_dof, fingers_dof,
+                                show_viewer=show_viewer, render_cameras=render_cameras, knobs=knobs) 
+        
     logger.save(save_path)
     
     # Save final force plot for entire dataset

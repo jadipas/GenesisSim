@@ -65,7 +65,7 @@ def _random_quaternion():
     ])
 
 
-def setup_entities(scene, num_cubes: int = 1, cube_positions=None, cube_area=None, friction: float = 0.5, cube_size: float = 0.05, weight: float = 0.25):
+def setup_entities(scene, num_cubes: int = 1, cube_positions=None, cube_area=None, friction: float = 0.5, cube_size: float = 0.05, weight: float = 0.5):
     """Add entities to the scene with configurable cube spawning."""
     plane = scene.add_entity(gs.morphs.Plane())
 
@@ -154,10 +154,10 @@ def configure_robot(franka, preset="default"):
     )
 
 
-def init_scene(show_viewer: bool = True, cube_area=None) -> Tuple:
+def init_scene(show_viewer: bool = True, cube_area=None, num_cubes: int = 3) -> Tuple:
     """One-time scene initialization: create scene, spawn entities, build once."""
     scene = setup_scene(show_viewer=show_viewer)
-    plane, cubes, franka = setup_entities(scene, num_cubes=3, cube_area=cube_area)
+    plane, cubes, franka = setup_entities(scene, num_cubes=num_cubes, cube_area=cube_area)
     cam = setup_camera(scene)
     
     # Build the scene (expensive operation - only once)
@@ -210,9 +210,9 @@ def apply_knobs(knobs: SlipKnobs, scene, franka, cubes, fingers_dof):
         print(f"  [Warning] Failed to set finger force cap: {e}")
 
 
-def setup_with_knobs(knobs: SlipKnobs, show_viewer: bool = True):
+def setup_with_knobs(knobs: SlipKnobs, show_viewer: bool = True, cube_area=None, num_cubes: int = 3) -> Tuple:
     """Legacy combined setup (creates scene + applies knobs in one call)."""
-    scene, franka, cam, end_effector, cubes, motors_dof, fingers_dof = init_scene(show_viewer=show_viewer)
+    scene, franka, cam, end_effector, cubes, motors_dof, fingers_dof = init_scene(show_viewer=show_viewer, cube_area=cube_area, num_cubes=num_cubes)
     apply_knobs(knobs, scene, franka, cubes, fingers_dof)
     return scene, franka, cam, end_effector, cubes, motors_dof, fingers_dof
 
@@ -234,3 +234,12 @@ def reset_cube_positions(cubes, cube_area = None):
 
     for cube, pos in zip(cubes, cube_positions):
         cube.set_pos(pos)
+
+def scatter_cubes(cubes):
+    """Randomly scatter cubes far from working area."""
+    for cube in cubes:
+        cube.set_pos(np.array([
+            np.random.uniform(10.0, 15.0),
+            np.random.uniform(10.0, 15.0),
+            0.035,
+        ]))

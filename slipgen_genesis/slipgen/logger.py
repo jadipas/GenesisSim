@@ -1,40 +1,58 @@
 """Slipgen-facing logger extending SensorDataLogger with metadata and slip metrics."""
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from collections import defaultdict
 import numpy as np
 from slipgen.force_viz import ForceVisualizer
 from slipgen.contact_detection import DEFAULT_SLIP_THRESHOLD
 
+# Genesis default simulation timestep
+GENESIS_DEFAULT_DT = 0.01
+
 
 class Logger:
-    """Collects and stores sensor data for slip detection and dataset creation."""
+    """Collects and stores sensor data for slip detection and dataset creation.
     
-    def __init__(self, slip_threshold: float = DEFAULT_SLIP_THRESHOLD, sim_dt: float = None):
+    Each pick-and-place cycle (from Hover to Releasing) is treated as a separate
+    data instance. Instances are stored separately and saved with instance indices.
+    """
+    
+    def __init__(self, slip_threshold: float = DEFAULT_SLIP_THRESHOLD, sim_dt: float = GENESIS_DEFAULT_DT):
         """Initialize the logger.
         
         Args:
-            slip_threshold: Distance threshold for slip detection (meters). Default: 0.015m
-            sim_dt: Simulation timestep duration (seconds). If None, must be set later via set_sim_dt()
+            slip_threshold: Distance threshold for slip detection (meters). Default: 0.05m
+            sim_dt: Simulation timestep duration (seconds). Default: 0.01 (Genesis default)
         """
         self.visualizer = ForceVisualizer(title="Gripper Force Monitoring")
         self.slip_threshold = slip_threshold
         self.sim_dt = sim_dt
-        self.reset()
+        self.cycle_count = 0
+        
+        # Storage for completed instances
+        self.instances: List[Dict[str, Any]] = []
+        
+        # Current instance being recorded
+        self._reset_current_instance()
     
-    def reset(self):
-        """Clear all logged data."""
+    def _reset_current_instance(self):
+        """Reset the current instance data (called when starting a new pick-and-place)."""
         self.data = defaultdict(list)
         self.timestep = 0
         self.phase_markers = {}
         self.grasp_phase_contact = []
         self.current_phase: str | None = None
-        self.cycle_count: int = 0
         # Distance-based slip tracking
         self.baseline_ee_cube_distance: Optional[float] = None
         self.slip_events: list[Dict[str, Any]] = []  # List of slip event records
         self.slip_active_phases: set[str] = set()  # Phases where slip detection is active
+        self._instance_started = False
+    
+    def reset(self):
+        """Clear all logged data including all instances."""
+        self.instances = []
+        self.cycle_count = 0
+        self._reset_current_instance()
         # Keep visualizer alive across resets
-        # Note: sim_dt is preserved across resets
     
     def set_sim_dt(self, dt: float):
         """Set the simulation timestep duration.
@@ -43,6 +61,58 @@ class Logger:
             dt: Timestep duration in seconds (e.g., 0.01 for 100Hz)
         """
         self.sim_dt = dt
+    
+    def start_instance(self):
+        """Mark the start of a new pick-and-place instance.
+        
+        Call this at the beginning of each pick-and-place cycle (Hover phase start).
+        """
+        if self._instance_started and self.timestep > 0:
+            # Auto-finalize previous instance if not done explicitly
+            self.end_instance()
+        self._reset_current_instance()
+        self._instance_started = True
+        print(f"[Logger] Started new instance (will be instance #{len(self.instances)})")
+    
+    def end_instance(self):
+        """Finalize the current pick-and-place instance.
+        
+        Call this at the end of each pick-and-place cycle (after Releasing phase).
+        Stores the instance and prepares for the next one.
+        """
+        if not self._instance_started or self.timestep == 0:
+            print("[Logger] Warning: end_instance() called without data - skipping")
+            return
+        
+        # Build instance data dict
+        instance_data = {
+            'timesteps': self.timestep,
+            'sim_dt': self.sim_dt,
+            'slip_threshold': self.slip_threshold,
+            'phase_markers': dict(self.phase_markers),
+            'slip_events': list(self.slip_events),
+            'baseline_ee_cube_distance': self.baseline_ee_cube_distance,
+            'slip_mask': self.get_slip_mask(sticky=True),
+            'slip_mask_instantaneous': self.get_slip_mask(sticky=False),
+            'first_slip_timestep': self.get_first_slip_timestep(),
+        }
+        
+        # Copy sensor data arrays
+        for key, values in self.data.items():
+            if len(values) > 0 and isinstance(values[0], np.ndarray):
+                instance_data[key] = np.array(values)
+            else:
+                instance_data[key] = np.array(values) if values else np.array([])
+        
+        self.instances.append(instance_data)
+        self.cycle_count += 1
+        
+        first_slip = instance_data['first_slip_timestep']
+        slip_occurred = first_slip is not None
+        print(f"[Logger] Finalized instance #{len(self.instances)-1}: "
+              f"{self.timestep} timesteps, slip_occurred={slip_occurred}, first_slip={first_slip}")
+        
+        self._instance_started = False
 
     def log_step(self, step_data: Dict[str, Any]):
         """Log data for current timestep."""
@@ -64,38 +134,66 @@ class Logger:
         return None
     
     def save(self, filepath: str, include_slip_mask: bool = True):
-        """Save logged data to npz file.
+        """Save all logged instances to npz file.
+        
+        Each instance is a separate pick-and-place cycle, saved with prefix 'instance_N_'.
+        Also saves global metadata.
         
         Args:
             filepath: Path to save the .npz file
-            include_slip_mask: If True, includes 'slip_mask' array where 1 indicates
-                              slip occurred at or before that timestep (sticky behavior)
+            include_slip_mask: If True, includes slip_mask arrays per instance
         """
+        # Finalize current instance if still recording
+        if self._instance_started and self.timestep > 0:
+            self.end_instance()
+        
+        if len(self.instances) == 0:
+            print(f"[Logger] Warning: No instances to save!")
+            return
+        
         save_dict = {}
-        for key, values in self.data.items():
-            if len(values) > 0 and isinstance(values[0], np.ndarray):
-                save_dict[key] = np.array(values)
-            else:
-                save_dict[key] = values
         
-        # Add metadata
-        save_dict['sim_dt'] = self.sim_dt if self.sim_dt is not None else -1.0
+        # Global metadata
+        save_dict['num_instances'] = len(self.instances)
+        save_dict['sim_dt'] = self.sim_dt
         save_dict['slip_threshold'] = self.slip_threshold
-        save_dict['total_timesteps'] = self.timestep
         
-        # Add slip mask (sticky: once slip happens, all subsequent = 1)
-        if include_slip_mask:
-            save_dict['slip_mask'] = self.get_slip_mask(sticky=True)
-            save_dict['slip_mask_instantaneous'] = self.get_slip_mask(sticky=False)
-            first_slip = self.get_first_slip_timestep()
-            save_dict['first_slip_timestep'] = first_slip if first_slip is not None else -1
+        # Per-instance data with prefix
+        for idx, instance in enumerate(self.instances):
+            prefix = f"instance_{idx}_"
+            
+            # Metadata for this instance
+            save_dict[f'{prefix}timesteps'] = instance['timesteps']
+            save_dict[f'{prefix}first_slip_timestep'] = instance['first_slip_timestep'] if instance['first_slip_timestep'] is not None else -1
+            
+            # Slip masks
+            if include_slip_mask:
+                save_dict[f'{prefix}slip_mask'] = instance['slip_mask']
+                save_dict[f'{prefix}slip_mask_instantaneous'] = instance['slip_mask_instantaneous']
+            
+            # Sensor data arrays
+            for key, values in instance.items():
+                if key in ('timesteps', 'sim_dt', 'slip_threshold', 'phase_markers', 
+                          'slip_events', 'baseline_ee_cube_distance', 'slip_mask', 
+                          'slip_mask_instantaneous', 'first_slip_timestep'):
+                    continue  # Skip metadata, already handled
+                
+                if isinstance(values, np.ndarray) and values.size > 0:
+                    save_dict[f'{prefix}{key}'] = values
         
         np.savez_compressed(filepath, **save_dict)
-        print(f"Saved sensor data to {filepath}")
-        print(f"  sim_dt={self.sim_dt}s, total_timesteps={self.timestep}, slip_threshold={self.slip_threshold}m")
-        if include_slip_mask:
-            slip_occurred = save_dict['first_slip_timestep'] != -1
-            print(f"  Slip mask included: slip_occurred={slip_occurred}, first_slip_timestep={save_dict['first_slip_timestep']}")
+        
+        print(f"\nSaved {len(self.instances)} instances to {filepath}")
+        print(f"  Global: sim_dt={self.sim_dt}s, slip_threshold={self.slip_threshold}m")
+        
+        # Summary per instance
+        for idx, instance in enumerate(self.instances):
+            slip_occurred = instance['first_slip_timestep'] is not None
+            print(f"  Instance {idx}: {instance['timesteps']} timesteps, slip={slip_occurred}")
+    
+    def get_instance_count(self) -> int:
+        """Get number of completed instances."""
+        return len(self.instances)
     
     def get_contact_state_label(self) -> int:
         """Get contact state label for current timestep."""

@@ -288,6 +288,9 @@ def run_pick_and_place_demo(
     - shake_amp: Joint shake amplitude in radians (0=off, 0.01-0.03 typical)
     - shake_freq: Shake frequency in cycles over trajectory (4-8 typical)
     """
+    # Start a new instance for this pick-and-place cycle
+    logger.start_instance()
+    
     # Reset visualizer for this pick-and-place cycle
     logger.reset_visualizer()
     
@@ -500,7 +503,7 @@ def run_pick_and_place_demo(
             "steps": transport_steps // max(1, len(arc_debug_info.get("key_waypoints", [1])))
         })
     
-    debug_trajectory_lines = draw_trajectory_debug(scene, transfer_waypoints, color=(1, 1, 0, 1))
+    # debug_trajectory_lines = draw_trajectory_debug(scene, transfer_waypoints, color=(1, 1, 0, 1))
 
     if debug_plot_transfer:
         log_transfer_debug(transfer_waypoints, path, franka, end_effector)
@@ -562,15 +565,16 @@ def run_pick_and_place_demo(
     )
     logger.mark_phase_end("Releasing")
     
+    # End this pick-and-place instance (data from Hover to Releasing is saved)
+    logger.end_instance()
+    
     print("[DEMO] Cube dropped. Generating force plot...")
     
     # Generate force plot for this pick-and-place cycle
     filename = f"force_plot_cycle{logger.cycle_count}.png"
     # logger.save_force_plot(output_dir=".", filename=filename)
-    
-    logger.cycle_count += 1
 
-    erase_trajectory_debug(scene, debug_trajectory_lines)
+    # erase_trajectory_debug(scene, debug_trajectory_lines)
 
     retreat_qpos = franka.inverse_kinematics(
         link=end_effector,
