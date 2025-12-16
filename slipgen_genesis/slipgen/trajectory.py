@@ -487,8 +487,8 @@ def execute_trajectory(franka, scene, cam, end_effector, cube, logger,
                 threshold=threshold,
             )
             logger.log_slip_check(slip_result)
-            if logger.check_and_log_slip(slip_result):
-                print(f"SLIP DETECTED at timestep {logger.timestep}, displacement: {slip_result['displacement_from_baseline']:.4f}m (threshold: {threshold:.4f}m)")
+            # if logger.check_and_log_slip(slip_result):
+            #     print(f"SLIP DETECTED at timestep {logger.timestep}, displacement: {slip_result['displacement_from_baseline']:.4f}m (threshold: {threshold:.4f}m)")
         
         # Invoke any scheduled callbacks for this step
         if step_idx in callbacks:

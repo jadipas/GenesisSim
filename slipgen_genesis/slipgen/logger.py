@@ -189,7 +189,7 @@ class Logger:
         # Summary per instance
         for idx, instance in enumerate(self.instances):
             slip_occurred = instance['first_slip_timestep'] is not None
-            print(f"  Instance {idx}: {instance['timesteps']} timesteps, slip={slip_occurred}")
+            # print(f"  Instance {idx}: {instance['timesteps']} timesteps, slip={slip_occurred}")
     
     def get_instance_count(self) -> int:
         """Get number of completed instances."""

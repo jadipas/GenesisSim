@@ -304,9 +304,9 @@ def run_pick_and_place_demo(
     R_cube = _quat_to_rotation_matrix(cube_quat)
     cube_x_world = R_cube[:, 0]
     angle_grasp = np.arctan2(cube_x_world[1], cube_x_world[0])
-    print(f"[DEBUG] Cube x-axis rotation (world z): {np.degrees(angle_grasp):.2f}°")
-    print(f"[DEBUG] Grasp quaternion: [{quat_grasp[0]:.3f}, {quat_grasp[1]:.3f}, {quat_grasp[2]:.3f}, {quat_grasp[3]:.3f}]")
-    print(f"[DEBUG] Drop quaternion: [{quat_drop[0]:.3f}, {quat_drop[1]:.3f}, {quat_drop[2]:.3f}, {quat_drop[3]:.3f}]")
+    # print(f"[DEBUG] Cube x-axis rotation (world z): {np.degrees(angle_grasp):.2f}°")
+    # print(f"[DEBUG] Grasp quaternion: [{quat_grasp[0]:.3f}, {quat_grasp[1]:.3f}, {quat_grasp[2]:.3f}, {quat_grasp[3]:.3f}]")
+    # print(f"[DEBUG] Drop quaternion: [{quat_drop[0]:.3f}, {quat_drop[1]:.3f}, {quat_drop[2]:.3f}, {quat_drop[3]:.3f}]")
 
     cube_half_height = 0.025
     cube_top_z = cube_pos[2] + cube_half_height
@@ -320,18 +320,18 @@ def run_pick_and_place_demo(
     lift_height = cube_top_z + 0.15 + abs(finger_tip_offset)
 
     hover_target_pos = np.array([cube_pos[0], cube_pos[1], hover_height])
-    print(f"[DEBUG] Cube top Z: {cube_top_z:.4f}, Hand link hover Z: {hover_height:.4f}, Finger tip Z: {hover_height + finger_tip_offset:.4f}")
+    # print(f"[DEBUG] Cube top Z: {cube_top_z:.4f}, Hand link hover Z: {hover_height:.4f}, Finger tip Z: {hover_height + finger_tip_offset:.4f}")
     q_hover = franka.inverse_kinematics(
         link=end_effector,
         pos=hover_target_pos,
         quat=quat_grasp,
     )
     q_hover = _as_np(q_hover)
-    print(f"[DEBUG] Hover IK result: {q_hover}")
+    # print(f"[DEBUG] Hover IK result: {q_hover}")
     q_hover[-2:] = 0.04
-    print(f"[DEBUG] Hover IK with gripper: {q_hover}")
+    # print(f"[DEBUG] Hover IK with gripper: {q_hover}")
     path = franka.plan_path(qpos_goal=q_hover, num_waypoints=300)
-    print(f"[DEBUG] Hover trajectory has {len(path)} waypoints")
+    # print(f"[DEBUG] Hover trajectory has {len(path)} waypoints")
     execute_trajectory(franka, scene, cam, end_effector, cube, logger, path, render_cameras=render_cameras, phase_name="Hover",finger_force=np.array([6.0, 6.0]),fingers_dof=fingers_dof, knobs=knobs)
 
     execute_steps(franka, scene, cam, end_effector, cube, logger, num_steps=80, render_cameras=render_cameras, phase_name="Hover Stabilize", finger_force=np.array([6.0, 6.0]), fingers_dof=fingers_dof, knobs=knobs)
@@ -341,15 +341,15 @@ def run_pick_and_place_demo(
         cube_pos[1] + lateral_offset[1],
         approach_height,
     ])
-    print(f"[DEBUG] Approach target: pos={approach_target_pos}, lateral_offset={lateral_offset}")
-    print(f"[DEBUG] Approach: Hand link Z: {approach_height:.4f}, Finger tip Z: {approach_height + finger_tip_offset:.4f}, Cube top Z: {cube_top_z:.4f}")
+    # print(f"[DEBUG] Approach target: pos={approach_target_pos}, lateral_offset={lateral_offset}")
+    # print(f"[DEBUG] Approach: Hand link Z: {approach_height:.4f}, Finger tip Z: {approach_height + finger_tip_offset:.4f}, Cube top Z: {cube_top_z:.4f}")
     q_approach = franka.inverse_kinematics(
         link=end_effector,
         pos=approach_target_pos,
         quat=quat_grasp,
     )
     q_approach = _as_np(q_approach)
-    print(f"[DEBUG] Approach IK result: {q_approach}")
+    # print(f"[DEBUG] Approach IK result: {q_approach}")
     q_current = franka.get_qpos()
     if hasattr(q_current, 'cpu'):
         q_current = q_current.cpu().numpy()
@@ -472,9 +472,9 @@ def run_pick_and_place_demo(
     arc_height_val = np.random.uniform(0.55, 0.65)
     arc_bias_val = np.random.uniform(-0.03, 0.03)
     
-    print(f"[Transfer] Planning joint-space arc trajectory...")
-    print(f"  Start: {start_pos}, End: {final_drop_pos}")
-    print(f"  Arc height: {arc_height_val:.3f}, Arc bias: {arc_bias_val:.3f}")
+    # print(f"[Transfer] Planning joint-space arc trajectory...")
+    # print(f"  Start: {start_pos}, End: {final_drop_pos}")
+    # print(f"  Arc height: {arc_height_val:.3f}, Arc bias: {arc_bias_val:.3f}")
     
     # Generate smooth joint-space trajectory for the entire transfer (arc + descent in one)
     # End position is the final drop position, not an intermediate hover
@@ -510,7 +510,7 @@ def run_pick_and_place_demo(
     
     # Log FK verification results
     if arc_debug_info.get("fk_deviations"):
-        print(f"[Transfer] FK verification: max deviation = {arc_debug_info['max_deviation']:.4f}m")
+        # print(f"[Transfer] FK verification: max deviation = {arc_debug_info['max_deviation']:.4f}m")
         if not arc_debug_info.get("verification_passed", True):
             print(f"[Transfer] WARNING: Trajectory deviates significantly from planned Cartesian path!")
 
@@ -568,7 +568,7 @@ def run_pick_and_place_demo(
     # End this pick-and-place instance (data from Hover to Releasing is saved)
     logger.end_instance()
     
-    print("[DEMO] Cube dropped. Generating force plot...")
+    # print("[DEMO] Cube dropped. Generating force plot...")
     
     # Generate force plot for this pick-and-place cycle
     filename = f"force_plot_cycle{logger.cycle_count}.png"
