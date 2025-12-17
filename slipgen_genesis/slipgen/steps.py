@@ -72,8 +72,18 @@ def execute_steps(franka, scene, cam, end_effector, cube, logger,
                 threshold=threshold,
             )
             logger.log_slip_check(slip_result)
-            # if logger.check_and_log_slip(slip_result):
-            #     print(f"SLIP DETECTED at timestep {logger.timestep}, displacement: {slip_result['displacement_from_baseline']:.4f}m (threshold: {threshold:.4f}m)")
+            if logger.check_and_log_slip(slip_result):
+                print(f"SLIP DETECTED at timestep {logger.timestep}, displacement: {slip_result['displacement_from_baseline']:.4f}m (threshold: {threshold:.4f}m)")
+        elif check_slip and logger.baseline_ee_cube_distance is not None:
+            # Still log slip data even if not in active phase (for analysis)
+            threshold = slip_threshold if slip_threshold is not None else logger.slip_threshold
+            slip_result = detect_slip_by_distance(
+                cube_pos=sensor_data['obj_pos'],
+                ee_pos=sensor_data['ee_pos'],
+                baseline_distance=logger.baseline_ee_cube_distance,
+                threshold=threshold,
+            )
+            logger.log_slip_check(slip_result)
         
         if debug and i % print_interval == 0:
             q_current = franka.get_qpos()

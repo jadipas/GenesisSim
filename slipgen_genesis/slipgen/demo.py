@@ -89,8 +89,21 @@ def _rotation_matrix_to_quat(R):
     return quat / np.linalg.norm(quat)
 
 
-def _align_gripper_to_cube_z_axis(cube_quat):
-    """Create gripper orientation aligned with cube's z-axis."""
+def _align_gripper_to_cube_z_axis(cube_quat, tilt_angle=0.0):
+    """Create gripper orientation aligned with cube's z-axis with optional tilt.
+    
+    Args:
+        cube_quat: Quaternion representing the cube's orientation (w, x, y, z).
+        tilt_angle: Angle in degrees to tilt the gripper from horizontal.
+                    0° = gripper parallel to floor (pointing down, default)
+                    90° = gripper perpendicular to floor (pointing horizontally)
+                    Values in between give intermediate orientations.
+                    The tilt is applied around the gripper's approach axis,
+                    rotating from top-down grasp toward a side grasp.
+    
+    Returns:
+        Quaternion (w, x, y, z) for the gripper orientation.
+    """
     R_cube = _quat_to_rotation_matrix(cube_quat)
     
     cube_x_world = R_cube[:, 0]
@@ -105,19 +118,99 @@ def _align_gripper_to_cube_z_axis(cube_quat):
     
     cube_x_horizontal = cube_x_horizontal / np.linalg.norm(cube_x_horizontal)
     
-    angle = np.arctan2(cube_x_horizontal[1], cube_x_horizontal[0])
+    # Yaw angle: rotation around world z-axis to face the cube
+    yaw = np.arctan2(cube_x_horizontal[1], cube_x_horizontal[0])
     
-    cos_a = np.cos(angle)
-    sin_a = np.sin(angle)
+    # Tilt angle: 0° = pointing down (parallel to floor grasp)
+    #             90° = pointing horizontally (perpendicular to floor grasp)
+    tilt_rad = np.radians(np.clip(tilt_angle, 0.0, 90.0))
     
-    R_gripper = np.array([
-        [-cos_a, -sin_a, 0.0],
-        [-sin_a,  cos_a, 0.0],
-        [   0.0,    0.0, -1.0]
+    # Build rotation matrix:
+    # 1. Start with gripper pointing down (-Z world)
+    # 2. Apply tilt (pitch) around the gripper's local Y axis
+    # 3. Apply yaw around world Z axis
+    
+    cos_y = np.cos(yaw)
+    sin_y = np.sin(yaw)
+    cos_t = np.cos(tilt_rad)
+    sin_t = np.sin(tilt_rad)
+    
+    # Rotation around Z (yaw)
+    R_yaw = np.array([
+        [cos_y, -sin_y, 0.0],
+        [sin_y,  cos_y, 0.0],
+        [  0.0,    0.0, 1.0]
     ])
+    
+    # Rotation around Y (tilt/pitch) - tilts gripper from down toward horizontal
+    R_tilt = np.array([
+        [ cos_t, 0.0, sin_t],
+        [   0.0, 1.0,   0.0],
+        [-sin_t, 0.0, cos_t]
+    ])
+    
+    # Base gripper orientation: pointing down with fingers along X
+    # Gripper frame: X = finger direction, Y = palm normal, Z = approach (down)
+    R_base = np.array([
+        [-1.0,  0.0,  0.0],
+        [ 0.0,  1.0,  0.0],
+        [ 0.0,  0.0, -1.0]
+    ])
+    
+    # Combined rotation: first apply base, then tilt, then yaw
+    R_gripper = R_yaw @ R_tilt @ R_base
     
     return _rotation_matrix_to_quat(R_gripper)
 
+def _calculate_grasp_pos(cube_pos, cube_quat, tilt_angle=0.0, offset=0.15):
+    """Calculate pre-grasp position based on cube center, tilt angle, and offset.
+    
+    Uses simple trigonometry:
+    - At tilt_angle=0° (gripper down): approach from directly above (offset in +Z)
+    - At tilt_angle=90° (gripper horizontal): approach from side (offset in horizontal plane)
+    - In between: interpolate approach direction
+    
+    The horizontal approach direction is determined by the cube's orientation (its x-axis).
+    
+    Args:
+        cube_pos: 3D position of cube center
+        cube_quat: Quaternion orientation of cube (w, x, y, z)
+        tilt_angle: Gripper tilt in degrees (0=down, 90=horizontal)
+        offset: Distance from cube center to pre-grasp position
+    
+    Returns:
+        3D pre-grasp position
+    """
+    cube_pos = np.asarray(cube_pos, dtype=float)
+    tilt_rad = np.radians(np.clip(tilt_angle, 0.0, 90.0))
+    
+    # Get cube's x-axis in world frame (determines approach direction in XY plane)
+    R_cube = _quat_to_rotation_matrix(cube_quat)
+    cube_x_world = R_cube[:, 0]
+    
+    # Project to horizontal and normalize
+    approach_dir_xy = np.array([cube_x_world[0], cube_x_world[1]], dtype=float)
+    if np.linalg.norm(approach_dir_xy) < 0.1:
+        # Fallback if cube x-axis is nearly vertical
+        cube_y_world = R_cube[:, 1]
+        approach_dir_xy = np.array([cube_y_world[0], cube_y_world[1]], dtype=float)
+    if np.linalg.norm(approach_dir_xy) < 0.1:
+        approach_dir_xy = np.array([1.0, 0.0], dtype=float)
+    approach_dir_xy = approach_dir_xy / np.linalg.norm(approach_dir_xy)
+    
+    # Trigonometry: decompose offset into vertical and horizontal components
+    # vertical component = offset * cos(tilt_angle)  (max when tilt=0, zero when tilt=90)
+    # horizontal component = offset * sin(tilt_angle) (zero when tilt=0, max when tilt=90)
+    vertical_offset = offset * np.cos(tilt_rad)
+    horizontal_offset = offset * np.sin(tilt_rad)
+    
+    # Pre-grasp position: cube center + vertical offset (up) + horizontal offset (along approach dir)
+    pre_grasp_pos = cube_pos.copy()
+    pre_grasp_pos[2] += vertical_offset  # Move up
+    pre_grasp_pos[0] += horizontal_offset * approach_dir_xy[0]  # Move back in X
+    pre_grasp_pos[1] += horizontal_offset * approach_dir_xy[1]  # Move back in Y
+    
+    return pre_grasp_pos
 
 def _mirror_gripper_orientation(gripper_quat, angle_deg=90.0):
     """Create a rotated gripper orientation (rotation around world z-axis)."""
@@ -274,6 +367,7 @@ def run_pick_and_place_demo(
     shake_amp=0.0,
     shake_freq=6.0,
     knobs=None,
+    grasp_tilt_angle=0.0,
 ):
     """
     Execute pick-and-place for a single cube to a specified drop position.
@@ -281,6 +375,7 @@ def run_pick_and_place_demo(
     Args:
         show_viewer: Show Genesis 3D viewer (for scene.step visualization)
         render_cameras: Render OpenCV RGB/depth camera windows
+        grasp_tilt_angle: Gripper tilt angle in degrees (0=parallel to floor, 90=perpendicular)
     
     Transport disturbance parameters:
     - transport_steps: Total steps for transport phase (default 240)
@@ -298,7 +393,7 @@ def run_pick_and_place_demo(
     cube_quat = _as_np(cube.get_quat())
     drop_pos = _as_np(drop_pos) if drop_pos is not None else np.array([0.55, 0.25, 0.15])
     
-    quat_grasp = _align_gripper_to_cube_z_axis(cube_quat)
+    quat_grasp = _align_gripper_to_cube_z_axis(cube_quat, tilt_angle=grasp_tilt_angle)
     quat_drop = _mirror_gripper_orientation(quat_grasp, angle_deg=45.0)
     
     R_cube = _quat_to_rotation_matrix(cube_quat)
@@ -598,6 +693,211 @@ def run_pick_and_place_demo(
         knobs=knobs,
     )
 
+def run_pick_and_hold_demo(
+    franka,
+    scene,
+    cam,
+    end_effector,
+    cube,
+    logger,
+    motors_dof,
+    fingers_dof,
+    render_cameras=True,
+    lift_height=0.1,
+    debug_plot_transfer=True,
+    transport_steps=240,
+    phase_warp_level=0,
+    shake_amp=0.0,
+    shake_freq=6.0,
+    knobs=None,
+    grasp_tilt_angle=0.0,
+):
+    # Start a new instance for this pick-and-hold cycle
+    logger.start_instance()
+    # Reset visualizer for this pick-and-hold cycle
+    logger.reset_visualizer()
+    cube_pos = _as_np(cube.get_pos())
+    cube_quat = _as_np(cube.get_quat())
+
+    # Choose grasp orientation aligned with cube z-axis
+    quat_grasp = _align_gripper_to_cube_z_axis(cube_quat, tilt_angle=grasp_tilt_angle)
+    
+    # Calculate pre-grasp position using trigonometry
+    # Offset from cube center based on tilt angle
+    pre_grasp_offset = 0.2
+    pre_grasp_pos = _calculate_grasp_pos(
+        cube_pos, cube_quat, 
+        tilt_angle=grasp_tilt_angle, 
+        offset=pre_grasp_offset
+    )
+    
+    # Compute IK for pre-grasp position
+    q_pre_grasp = franka.inverse_kinematics(
+        link=end_effector,
+        pos=pre_grasp_pos,
+        quat=quat_grasp,
+    )
+    q_pre_grasp = _as_np(q_pre_grasp)
+    q_pre_grasp[-2:] = 0.04  # Open gripper
+    
+    
+    # Plan path to pre-grasp position
+    path = franka.plan_path(qpos_goal=q_pre_grasp, num_waypoints=300)
+    
+    # Execute trajectory to pre-grasp
+    execute_trajectory(
+        franka, scene, cam, end_effector, cube, logger, path,
+        render_cameras=render_cameras,
+        phase_name="Move to Pre-Grasp",
+        knobs=knobs,
+    )
+    
+    # Stabilize at pre-grasp position
+    from slipgen.steps import execute_steps
+    execute_steps(
+        franka, scene, cam, end_effector, cube, logger,
+        num_steps=100,
+        render_cameras=render_cameras,
+        phase_name="Pre-Grasp Stabilize",
+        knobs=knobs,
+    )
+    
+    # Step 3: Move delicately from pre-grasp to grasp position
+    grasp_pos = _calculate_grasp_pos(
+        cube_pos=cube_pos, 
+        cube_quat=cube_quat, 
+        tilt_angle=grasp_tilt_angle, 
+        offset=0.1)
+
+    q_grasp = franka.inverse_kinematics(
+        link=end_effector,
+        pos=grasp_pos,
+        quat=quat_grasp,
+    )
+    q_grasp = _as_np(q_grasp)
+    q_grasp[-2:] = 0.04  # Keep gripper open during approach
+    
+    # Use step-based control for delicate approach (not trajectory execution)
+    # This provides finer control as we approach the object
+    execute_steps(
+        franka, scene, cam, end_effector, cube, logger,
+        num_steps=150,
+        motors_dof=motors_dof,
+        qpos=q_grasp[:-2],
+        finger_qpos=np.array([0.04, 0.04]),  # Keep open
+        fingers_dof=fingers_dof,
+        render_cameras=render_cameras,
+        phase_name="Approach to Grasp",
+        knobs=knobs,
+    )
+    
+    # Brief stabilization before closing gripper
+    execute_steps(
+        franka, scene, cam, end_effector, cube, logger,
+        num_steps=50,
+        render_cameras=render_cameras,
+        phase_name="Pre-Close Stabilize",
+        knobs=knobs,
+    )
+
+    # Step 4: Close the gripper
+    logger.mark_phase_start("Grasping")
+    q_finger_target = knobs.q_finger_target if knobs is not None else -0.04
+    execute_steps(
+        franka, scene, cam, end_effector, cube, logger,
+        num_steps=150,
+        motors_dof=motors_dof,
+        qpos=q_grasp[:-2],  # Hold arm position
+        finger_qpos=np.array([q_finger_target, q_finger_target]),
+        fingers_dof=fingers_dof,
+        print_status=True,
+        print_interval=30,
+        phase_name="Grasping",
+        render_cameras=render_cameras,
+        knobs=knobs,
+    )
+    logger.mark_phase_end("Grasping")
+
+    # Stabilize gripper after closing
+    logger.mark_phase_start("Grasp Stabilization")
+    q_current = franka.get_qpos()
+    if hasattr(q_current, 'cpu'):
+        q_current = q_current.cpu().numpy()
+    execute_steps(
+        franka, scene, cam, end_effector, cube, logger,
+        num_steps=100,
+        motors_dof=motors_dof,
+        qpos=q_current[:-2],
+        finger_qpos=np.array([q_finger_target, q_finger_target]),
+        fingers_dof=fingers_dof,
+        print_status=True,
+        print_interval=25,
+        phase_name="Grasp Stabilization",
+        render_cameras=render_cameras,
+        knobs=knobs,
+    )
+    logger.mark_phase_end("Grasp Stabilization")
+
+    # Setup distance-based slip detection
+    # Capture baseline EE-cube distance now that grasp is stable
+    last_sensor_data = {
+        'obj_pos': _as_np(cube.get_pos()),
+        'ee_pos': _as_np(end_effector.get_pos()),
+    }
+    baseline_distance = float(np.linalg.norm(last_sensor_data['obj_pos'] - last_sensor_data['ee_pos']))
+    logger.capture_grasp_baseline(baseline_distance)
+    logger.set_slip_active_phases(["Hold", "Lifting"])
+
+    # Step 5: Lift the cube to specified height
+    # lift_height is relative to current grasp position, not absolute Z
+    current_ee_pos = _as_np(end_effector.get_pos())
+    lift_target_pos = np.array([current_ee_pos[0], current_ee_pos[1], current_ee_pos[2] + lift_height])
+    
+    q_lift = franka.inverse_kinematics(
+        link=end_effector,
+        pos=lift_target_pos,
+        quat=quat_grasp,
+    )
+    q_lift = _as_np(q_lift)
+    q_lift[-2:] = q_finger_target  # Maintain grip during lift
+    
+    # Use step-based control for lifting (avoids path planning failures)
+    # This is safer since we're already holding the object and just moving up
+    logger.mark_phase_start("Lifting")
+    execute_steps(
+        franka, scene, cam, end_effector, cube, logger,
+        num_steps=200,
+        motors_dof=motors_dof,
+        qpos=q_lift[:-2],
+        finger_qpos=np.array([q_finger_target, q_finger_target]),
+        fingers_dof=fingers_dof,
+        print_status=True,
+        print_interval=50,
+        phase_name="Lifting",
+        render_cameras=render_cameras,
+        knobs=knobs,
+    )
+    logger.mark_phase_end("Lifting")
+
+    # Step 6: Hold position with the cube lifted (HODOR)
+    logger.mark_phase_start("Hold")
+    execute_steps(
+        franka, scene, cam, end_effector, cube, logger,
+        num_steps=1000,
+        motors_dof=motors_dof,
+        qpos=q_lift[:-2],
+        finger_qpos=np.array([q_finger_target, q_finger_target]),
+        fingers_dof=fingers_dof,
+        print_status=True,
+        print_interval=75,
+        phase_name="Hold",
+        render_cameras=render_cameras,
+        knobs=knobs,
+    )
+    logger.mark_phase_end("Hold")
+    # End this pick-and-hold instance
+    logger.end_instance()
+
 
 def run_iterative_pick_and_place(
     franka,
@@ -615,6 +915,7 @@ def run_iterative_pick_and_place(
     shake_amp=0.0,
     shake_freq=6.0,
     knobs=None,
+    grasp_tilt_angle=0.0,
 ):
     """
     Iteratively pick random cubes and place them to the robot's side.
@@ -622,6 +923,7 @@ def run_iterative_pick_and_place(
     Args:
         show_viewer: Show Genesis 3D viewer (for scene.step visualization)
         render_cameras: Render OpenCV RGB/depth camera windows
+        grasp_tilt_angle: Gripper tilt angle in degrees (0=parallel to floor, 90=perpendicular)
     
     Transport disturbance parameters:
     - transport_steps: Total steps for transport phase (default 240)
@@ -660,6 +962,7 @@ def run_iterative_pick_and_place(
             shake_amp=shake_amp,
             shake_freq=shake_freq,
             knobs=knobs,
+            grasp_tilt_angle=grasp_tilt_angle,
         )
 
         try:

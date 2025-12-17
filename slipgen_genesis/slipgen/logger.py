@@ -231,9 +231,10 @@ class Logger:
         self.slip_active_phases = set(phases)
     
     def check_and_log_slip(self, slip_result: Dict[str, Any]) -> bool:
-        """Check slip detection result and log if slip occurred.
+        """Check slip detection result and log slip event if threshold exceeded.
         
-        Call this during phases where slip detection is active.
+        This records the slip event for summary statistics (slip_events list).
+        The per-timestep data is already logged by log_slip_check().
         
         Args:
             slip_result: Result dict from detect_slip_by_distance()
@@ -259,10 +260,6 @@ class Logger:
             'horizontal_slip': slip_result.get('horizontal_slip', 0.0),
         }
         self.slip_events.append(slip_event)
-        
-        # Also store in main data log for per-timestep analysis
-        self.data['slip_detected'].append(True)
-        self.data['slip_displacement'].append(slip_result['displacement_from_baseline'])
         
         return True
     
